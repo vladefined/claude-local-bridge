@@ -29,8 +29,10 @@ def call(method, path, body=b""):
     nonce = uuid.uuid4().hex
     msg = f"{ts}\n{nonce}\n{method}\n{path}\n".encode() + body
     sig = hmac.new(secret, msg, hashlib.sha256).hexdigest()
+    # Cloudflare refuses the default Python-urllib User-Agent (error 1010), so send our own.
     req = urllib.request.Request(base + path, data=body if method == "POST" else None, method=method,
-                                 headers={"Content-Type": "application/json", "X-Bridge-Timestamp": ts,
+                                 headers={"Content-Type": "application/json", "User-Agent": "claude-local-bridge-client/1.0",
+                                          "X-Bridge-Timestamp": ts,
                                           "X-Bridge-Nonce": nonce, "X-Bridge-Signature": sig})
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
