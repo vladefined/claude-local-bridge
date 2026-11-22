@@ -1,4 +1,4 @@
-# task-bridge
+# claude-local-bridge
 
 A remote AI agent proposes a task. **You read the exact text and press Approve** —
 in Telegram or in a Windows notification. Only then does Claude Code run it on your
@@ -6,7 +6,7 @@ machine, in a folder from a fixed list, with a fixed set of tools. The answer co
 back to Telegram and to the agent that asked.
 
 ```
-cloud agent ──signed POST──▶ task-bridge (your PC) ──▶ Telegram: [Approve] [Reject]
+cloud agent ──signed POST──▶ bridge (your PC)   ──▶ Telegram: [Approve] [Reject]
                                     │                ──▶ Windows toast: [Approve] [Reject]
                                     │  first press wins, the other channel is updated
                                     ▼
@@ -43,7 +43,7 @@ $env:BRIDGE_HMAC_SECRET = "<64 random hex chars>"
 $env:BRIDGE_TELEGRAM_TOKEN = "<bot token>"
 $env:BRIDGE_TELEGRAM_CHAT_ID = "<your user id>"
 mvn package
-java -jar target/task-bridge-0.1.0.jar
+java -jar target/claude-local-bridge-0.1.0.jar
 ```
 
 Folders, tools and timeouts are in `src/main/resources/application.yml`.

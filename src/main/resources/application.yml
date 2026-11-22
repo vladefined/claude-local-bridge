@@ -6,7 +6,7 @@ server:
 
 spring:
   datasource:
-    url: jdbc:sqlite:${BRIDGE_DB:task-bridge.db}
+    url: jdbc:sqlite:${BRIDGE_DB:claude-local-bridge.db}
     hikari:
       maximum-pool-size: 1   # SQLite: one writer, avoids SQLITE_BUSY
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Client for task-bridge. Standard library only.
+"""Client for claude-local-bridge. Standard library only.
 
 Signature: hex(HMAC-SHA256(secret, f"{ts}\n{nonce}\n{METHOD}\n{path}\n" + body)).
 """

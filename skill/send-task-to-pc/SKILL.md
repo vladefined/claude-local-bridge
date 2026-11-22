@@ -1,6 +1,6 @@
 ---
 name: send-task-to-pc
-description: Send a task to Claude Code on the owner's PC through task-bridge. The owner approves the exact text in Telegram or on the PC before anything runs. Use when work must happen on the owner's machine (local files, local tools, a running benchmark) and the owner asked for it.
+description: Send a task to Claude Code on the owner's PC through claude-local-bridge. The owner approves the exact text in Telegram or on the PC before anything runs. Use when work must happen on the owner's machine (local files, local tools, a running benchmark) and the owner asked for it.
 ---
 
 # Send a task to the owner's PC

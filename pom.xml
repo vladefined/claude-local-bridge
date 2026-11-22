@@ -10,9 +10,9 @@
     <relativePath/>
   </parent>
   <groupId>dev.vladefined</groupId>
-  <artifactId>task-bridge</artifactId>
+  <artifactId>claude-local-bridge</artifactId>
   <version>0.1.0</version>
-  <name>task-bridge</name>
+  <name>claude-local-bridge</name>
   <description>Human-approved bridge: a remote agent proposes a task, you approve the exact text, local Claude Code runs it.</description>
   <properties>
     <java.version>21</java.version>
