@@ -16,6 +16,9 @@ bridge:
   max-task-chars: 3000
   # Longer results are cut in the DB / Telegram / API; the full text is kept in runner.output-dir
   max-result-chars: 3500
+  ui:
+    # Language of Telegram messages, toasts and the local page: en or ru
+    language: ${BRIDGE_LANGUAGE:en}
   telegram:
     enabled: ${BRIDGE_TELEGRAM_ENABLED:true}
     bot-token: ${BRIDGE_TELEGRAM_TOKEN:}

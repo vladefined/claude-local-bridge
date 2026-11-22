@@ -50,6 +50,8 @@ java -jar target/claude-local-bridge-0.1.0.jar
 
 Folders, tools and timeouts are in `src/main/resources/application.yml`.
 If `claude` is not found, set `bridge.runner.command` to the full path of `claude.exe`.
+Messages, toasts and the local page are in English; set `$env:BRIDGE_LANGUAGE = "ru"`
+(or `bridge.ui.language`) for Russian. Texts live in `src/main/resources/ui/<language>.properties`.
 
 On Windows the toast buttons decide in the background: at startup the bridge
 registers a `claude-bridge:` URL handler for the current user (HKCU, no admin) that

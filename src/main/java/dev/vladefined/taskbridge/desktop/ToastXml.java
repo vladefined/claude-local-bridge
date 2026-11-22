@@ -4,6 +4,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import dev.vladefined.taskbridge.core.Task;
+import dev.vladefined.taskbridge.core.UiText;
 
 /** Builds the Windows toast XML. Every piece of task data is XML-escaped. */
 public final class ToastXml {
@@ -24,33 +25,33 @@ public final class ToastXml {
      * @param previewChars if the text is longer, "Approve" is replaced by "Open": you only
      *                     approve from the toast what the toast can show in full.
      */
-    public static String build(Task t, String pageUrl, boolean protocolButtons, int previewChars) {
+    public static String build(UiText ui, Task t, String pageUrl, boolean protocolButtons, int previewChars) {
         boolean fits = t.text().length() <= previewChars;
         String preview = fits ? t.text() : t.text().substring(0, previewChars) + "…";
         String approve = fits
-                ? action("Подтвердить", decision(t, pageUrl, protocolButtons, "approve"))
-                : action("Открыть полностью", pageUrl);
+                ? action(ui.t("toast.approve"), decision(t, pageUrl, protocolButtons, "approve"))
+                : action(ui.t("toast.open"), pageUrl);
         return "<toast scenario=\"reminder\" activationType=\"protocol\" launch=\"" + esc(pageUrl) + "\">"
                 + "<visual><binding template=\"ToastGeneric\">"
-                + "<text>" + esc("Задача " + t.id() + " → " + t.folder()) + "</text>"
+                + "<text>" + esc(ui.t("task.title", t.id()) + " → " + t.folder()) + "</text>"
                 + "<text>" + esc(preview) + "</text>"
-                + "<text placement=\"attribution\">" + esc("от: " + t.sender() + " · " + t.shortHash()) + "</text>"
+                + "<text placement=\"attribution\">" + esc(ui.t("toast.from", t.sender()) + " · " + t.shortHash()) + "</text>"
                 + "</binding></visual>"
                 + "<actions>" + approve
-                + action("Отклонить", decision(t, pageUrl, protocolButtons, "reject")) + "</actions>"
+                + action(ui.t("toast.reject"), decision(t, pageUrl, protocolButtons, "reject")) + "</actions>"
                 + "<audio src=\"ms-winsoundevent:Notification.Reminder\"/>"
                 + "</toast>";
     }
 
     /** The toast after a run: the agent's summary (or the start of its answer). Click opens the full output. */
-    public static String finished(Task t) {
-        String title = (t.status() == dev.vladefined.taskbridge.core.TaskStatus.DONE ? "Готово: " : "Ошибка: ")
-                + t.id() + " → " + t.folder();
+    public static String finished(UiText ui, Task t) {
+        String title = ui.t(t.status() == dev.vladefined.taskbridge.core.TaskStatus.DONE ? "result.done" : "result.failed",
+                t.id()) + " → " + t.folder();
         String text;
         if (t.summary() != null) {
             text = t.summary();
         } else {
-            String r = t.result() == null || t.result().isBlank() ? "(пустой ответ)" : t.result().strip();
+            String r = t.result() == null || t.result().isBlank() ? ui.t("result.empty") : t.result().strip();
             text = r.length() > RESULT_PREVIEW_CHARS ? r.substring(0, RESULT_PREVIEW_CHARS) + "…" : r;
         }
         String launch = "";
@@ -62,7 +63,7 @@ public final class ToastXml {
                 + "<visual><binding template=\"ToastGeneric\">"
                 + "<text>" + esc(title) + "</text>"
                 + "<text>" + esc(text) + "</text>"
-                + (launch.isEmpty() ? "" : "<text placement=\"attribution\">нажмите, чтобы открыть полный вывод</text>")
+                + (launch.isEmpty() ? "" : "<text placement=\"attribution\">" + esc(ui.t("toast.open-output")) + "</text>")
                 + "</binding></visual>"
                 + "</toast>";
     }

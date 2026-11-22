@@ -25,6 +25,7 @@ import dev.vladefined.taskbridge.core.DecisionAttempt;
 import dev.vladefined.taskbridge.core.Task;
 import dev.vladefined.taskbridge.core.TaskRepository;
 import dev.vladefined.taskbridge.core.TaskStatus;
+import dev.vladefined.taskbridge.core.UiText;
 
 /**
  * Approval on the PC itself: a Windows toast whose buttons decide in the background
@@ -46,6 +47,7 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
     private final TaskRepository repo;
     private final ApplicationEventPublisher events;
     private final WindowsToaster toaster;
+    private final UiText ui;
     private final int port;
     private final int previewChars;
     private final boolean windows;
@@ -54,13 +56,15 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
     private HttpServer server;
 
     @Autowired
-    public DesktopChannel(BridgeProperties props, TaskRepository repo, ApplicationEventPublisher events) {
-        this(props, repo, events, new WindowsToaster(),
+    public DesktopChannel(BridgeProperties props, TaskRepository repo, ApplicationEventPublisher events,
+                          UiText ui) {
+        this(props, repo, events, ui, new WindowsToaster(),
                 System.getProperty("os.name", "").toLowerCase().startsWith("windows"));
     }
 
     DesktopChannel(BridgeProperties props, TaskRepository repo, ApplicationEventPublisher events,
-                   WindowsToaster toaster, boolean windows) {
+                   UiText ui, WindowsToaster toaster, boolean windows) {
+        this.ui = ui;
         this.repo = repo;
         this.events = events;
         this.toaster = toaster;
@@ -80,7 +84,7 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
     @Override
     public void requestApproval(Task t) {
         if (windows) {
-            toaster.show(t.id(), ToastXml.build(t, pageUrl(t), protocolReady, previewChars));
+            toaster.show(t.id(), ToastXml.build(ui, t, pageUrl(t), protocolReady, previewChars));
         }
     }
 
@@ -94,7 +98,7 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
     @Override
     public void onFinished(Task t) {
         if (windows) {
-            toaster.show(t.id(), ToastXml.finished(t));
+            toaster.show(t.id(), ToastXml.finished(ui, t));
         }
     }
 
@@ -104,18 +108,18 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
         try (ex) {
             String host = ex.getRequestHeaders().getFirst("Host");
             if (!("127.0.0.1:" + port).equals(host) && !("localhost:" + port).equals(host)) {
-                send(ex, 403, page("Запрещено", "<p>Неверный адрес.</p>"));
+                send(ex, 403, page(ui.t("page.forbidden"), "<p>" + h(ui.t("page.bad-host")) + "</p>"));
                 return;
             }
             String[] parts = ex.getRequestURI().getPath().split("/");
             // ["", "t", token] or ["", "t", token, action]
             if (parts.length < 3 || !"t".equals(parts[1])) {
-                send(ex, 404, page("Не найдено", ""));
+                send(ex, 404, page(ui.t("page.not-found"), ""));
                 return;
             }
             Optional<Task> found = repo.findByDesktopToken(parts[2]);
             if (found.isEmpty()) {
-                send(ex, 404, page("Не найдено", "<p>Ссылка недействительна.</p>"));
+                send(ex, 404, page(ui.t("page.not-found"), "<p>" + h(ui.t("page.bad-link")) + "</p>"));
                 return;
             }
             Task t = found.get();
@@ -130,30 +134,31 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
             }
             send(ex, 200, render(t));
         } catch (IllegalArgumentException e) {
-            send(ex, 400, page("Ошибка", ""));
+            send(ex, 400, page(ui.t("page.error"), ""));
         }
     }
 
     String render(Task t) {
-        String body = "<p class=meta>Папка: <b>" + h(t.folder()) + "</b> · от: " + h(t.sender())
+        String body = "<p class=meta>" + h(ui.t("task.folder")) + ": <b>" + h(t.folder()) + "</b> · "
+                + h(ui.t("page.from")) + ": " + h(t.sender())
                 + " · SHA-256 " + h(t.shortHash()) + "</p>"
                 + "<pre>" + h(t.text()) + "</pre>";
         if (t.status() == TaskStatus.PENDING) {
-            body += "<form method=post action='" + h(pathFor(t)) + "/approve'><button class=ok>Подтвердить</button></form>"
-                    + "<form method=post action='" + h(pathFor(t)) + "/reject'><button class=no>Отклонить</button></form>";
+            body += "<form method=post action='" + h(pathFor(t)) + "/approve'><button class=ok>" + h(ui.t("toast.approve")) + "</button></form>"
+                    + "<form method=post action='" + h(pathFor(t)) + "/reject'><button class=no>" + h(ui.t("toast.reject")) + "</button></form>";
         } else {
-            body += "<p class=status>Статус: " + h(t.status().name())
+            body += "<p class=status>" + h(ui.t("page.status")) + ": " + h(t.status().name())
                     + (t.decidedBy() != null ? " (" + h(t.decidedBy()) + ")" : "") + "</p>";
         }
-        return page("Задача " + t.id(), body);
+        return page(ui.t("task.title", t.id()), body);
     }
 
     private static String pathFor(Task t) {
         return "/t/" + t.desktopToken();
     }
 
-    private static String page(String title, String body) {
-        return "<!doctype html><meta charset=utf-8><title>" + h(title) + "</title>"
+    private String page(String title, String body) {
+        return "<!doctype html><html lang=" + ui.language() + "><meta charset=utf-8><title>" + h(title) + "</title>"
                 + "<style>body{font:15px system-ui;max-width:760px;margin:24px auto;padding:0 16px}"
                 + "pre{white-space:pre-wrap;background:#f4f4f4;padding:12px;border-radius:6px}"
                 + "form{display:inline}button{font-size:15px;padding:8px 18px;margin-right:8px;border:0;border-radius:6px;cursor:pointer}"

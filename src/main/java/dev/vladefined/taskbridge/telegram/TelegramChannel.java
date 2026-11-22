@@ -20,6 +20,7 @@ import dev.vladefined.taskbridge.core.ApprovalChannel;
 import dev.vladefined.taskbridge.core.DecisionAttempt;
 import dev.vladefined.taskbridge.core.Task;
 import dev.vladefined.taskbridge.core.TaskRepository;
+import dev.vladefined.taskbridge.core.UiText;
 import dev.vladefined.taskbridge.runner.ClaudeRunner;
 import dev.vladefined.taskbridge.telegram.TelegramClient.Button;
 
@@ -40,11 +41,13 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
     private final TaskRepository repo;
     private final ApplicationEventPublisher events;
     private final boolean sendLog;
+    private final UiText ui;
     private volatile boolean running;
     private Thread poller;
 
     public TelegramChannel(BridgeProperties props, ObjectMapper json, TaskRepository repo,
-                           ApplicationEventPublisher events) {
+                           ApplicationEventPublisher events, UiText ui) {
+        this.ui = ui;
         if (props.telegram().botToken() == null || props.telegram().botToken().isBlank()
                 || props.telegram().chatId() == 0) {
             throw new IllegalStateException("Telegram is enabled but BRIDGE_TELEGRAM_TOKEN / "
@@ -59,9 +62,9 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
 
     @Override
     public void requestApproval(Task t) {
-        long msgId = client.sendMessage(chatId, TelegramFormat.request(t), java.util.List.of(
-                new Button("✅ Выполнить", "a:" + t.id()),
-                new Button("❌ Отклонить", "r:" + t.id())), null);
+        long msgId = client.sendMessage(chatId, TelegramFormat.request(ui, t), java.util.List.of(
+                new Button(ui.t("button.run"), "a:" + t.id()),
+                new Button(ui.t("button.reject"), "r:" + t.id())), null);
         repo.setTelegramMessageId(t.id(), msgId);
     }
 
@@ -69,20 +72,20 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
     public void onDecided(Task t) {
         Long msgId = repo.find(t.id()).map(Task::telegramMessageId).orElse(null);
         if (msgId != null) {
-            client.editMessageText(chatId, msgId, TelegramFormat.decided(t));
+            client.editMessageText(chatId, msgId, TelegramFormat.decided(ui, t));
         }
     }
 
     @Override
     public void onFinished(Task t) {
-        client.sendMessage(chatId, TelegramFormat.result(t), null, t.telegramMessageId());
+        client.sendMessage(chatId, TelegramFormat.result(ui, t), null, t.telegramMessageId());
         if (t.resultTruncated() && t.outputPath() != null) {
-            sendFile(t, Path.of(t.outputPath()), "Полный вывод");
+            sendFile(t, Path.of(t.outputPath()), ui.t("file.output"));
         }
         if (sendLog) {
             Path runLog = ClaudeRunner.sibling(t, ClaudeRunner.LOG_SUFFIX);
             if (runLog != null && Files.isRegularFile(runLog)) {
-                sendFile(t, runLog, "Лог выполнения");
+                sendFile(t, runLog, ui.t("file.log"));
             }
         }
     }
@@ -95,7 +98,7 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
             if (Files.size(file) <= MAX_DOCUMENT_BYTES) {
                 client.sendDocument(chatId, file, what + ": " + t.id(), t.telegramMessageId());
             } else {
-                client.sendMessage(chatId, what + " больше 50 МБ, лежит на ПК: " + file, null,
+                client.sendMessage(chatId, ui.t("file.too-big", what, file), null,
                         t.telegramMessageId());
             }
         } catch (IOException e) {
@@ -122,9 +125,9 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
         boolean approve = data.charAt(0) == 'a';
         events.publishEvent(new DecisionAttempt(data.substring(2), approve, CHANNEL));
         Task t = repo.find(data.substring(2)).orElse(null);
-        String answer = t == null ? "Задача не найдена"
-                : t.decidedBy() != null && !CHANNEL.equals(t.decidedBy()) ? "Уже решено: " + t.status()
-                : approve ? "Запускаю" : "Отклонено";
+        String answer = t == null ? ui.t("callback.not-found")
+                : t.decidedBy() != null && !CHANNEL.equals(t.decidedBy()) ? ui.t("callback.already", t.status())
+                : approve ? ui.t("callback.running") : ui.t("callback.rejected");
         client.answerCallbackQuery(cbId, answer);
     }
 
