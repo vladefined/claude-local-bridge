@@ -27,7 +27,7 @@ runs until a human has seen exactly what will be sent to Claude Code.
 |---|---|
 | Only someone holding the key can submit | HMAC-SHA256 over timestamp, nonce, method, path and raw body; 5-min window; nonces remembered (no replay); constant-time compare |
 | What you see is what runs | Plain-text messages only (no Markdown/HTML parse mode); text with invisible or reordering characters (bidi overrides, zero-width, control chars) is **refused**, not shown; SHA-256 prefix shown in every channel |
-| The remote side picks from a menu | Folder is a name from config, never a path; allowed tools are per folder in config; unknown JSON fields are rejected; a resume session id must look like an id (it can't start with `-` and become a CLI flag) |
+| The remote side picks from a menu | A task names a folder, never a path; allowed tools are per folder; unknown JSON fields are rejected; a resume session id must look like an id (it can't start with `-` and become a CLI flag). New folders and tools exist only after the owner approved a request for them, and requests that grant a whole shell, a drive, system or profile folders, secrets or the bridge itself are refused before anyone is asked |
 | No command-line injection on Windows | Task text goes to `claude -p` via **stdin**, never as an argument (`.cmd` shims re-parse arguments through cmd.exe) |
 | Exactly one decision | One atomic `UPDATE ... WHERE status='PENDING'` in SQLite; whichever channel is first wins, the other is edited/removed. Tested with 8 concurrent presses |
 | Approval page can't be reached from outside | It runs on a **separate** loopback port the tunnel never points to, needs a per-task 256-bit token (good for one decision), checks the Host header (DNS rebinding) |
@@ -115,6 +115,35 @@ session, which picks it up between tool calls.
 - Delivered messages appear in progress and in the log as `✉ Message from the caller`.
 
 `bridge.runner.command` must therefore accept stream-json input; Claude Code does.
+
+### Folders on request
+
+`bridge.folders` in the configuration is the starting set. The remote side can see the
+current set (`GET /folders`) and ask for changes (`POST /folders/requests`, kind `add`,
+`change` or `remove`, always with a reason). The owner approves each request in Telegram
+or a toast; it then applies at once and is kept in `bridge.folders-file` (default
+`%LOCALAPPDATA%\claude-local-bridge\folders.json`), which overrides configured folders of
+the same name. A task can also carry `extraTools`: shown in its approval request,
+valid for that task (and messages added to it) only.
+
+Checked before the owner is asked, and again before applying:
+- tool rules are `Name` or `Name(prefix)`, no commas, quotes or `& | < > ^ % !`; a shell
+  (`Bash`, `PowerShell`) only with a concrete command prefix, never bare or `(*)`;
+- the path must exist and is resolved to its real location (symlinks, `..`, 8.3 short
+  names), which is what the owner sees; drive roots, `Windows`, `Program Files`,
+  `ProgramData`, the user profile itself and anything containing it, `AppData`, `.ssh`,
+  `.claude`, `.aws` and similar, and the bridge's own folders are refused;
+- a new folder must be one of `bridge.access.roots` (env `BRIDGE_ACCESS_ROOTS`,
+  comma-separated, e.g. `E:\,D:\code`) or inside one; with no roots configured, requests
+  for new folders are refused (changing or removing existing ones still works).
+  `GET /folders` returns the roots too;
+- tools that change files or run commands are marked ⚠️; rules that start an
+  interpreter or build tool (`Bash(python:*)`, `Bash(node:*)`, `Bash(npm:*)`,
+  `Bash(mvn:*)`, `Bash(powershell:*)`, ...) are marked ‼️ with a separate line saying
+  that in practice they allow running any code; a folder whose own
+  `.claude/settings.json` allows more is flagged, because Claude Code adds those rules.
+
+Requests expire after 30 minutes; at most 5 wait at a time.
 
 Expose port 8765 (API only) with a tunnel, e.g. a named Cloudflare Tunnel on your
 domain. Do **not** expose 8766 (local approval page).

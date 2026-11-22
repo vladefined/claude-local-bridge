@@ -177,6 +177,9 @@ public class TaskController {
         m.put("status", t.status());
         m.put("sha256", t.sha256());
         m.put("decidedBy", t.decidedBy());
+        if (!t.extraToolList().isEmpty()) {
+            m.put("extraTools", t.extraToolList());
+        }
         m.put("summary", t.summary());
         m.put("result", t.result());
         m.put("resultTruncated", t.resultTruncated());

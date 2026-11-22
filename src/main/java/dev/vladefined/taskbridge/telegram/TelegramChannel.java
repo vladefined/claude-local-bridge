@@ -19,6 +19,9 @@ import dev.vladefined.taskbridge.config.BridgeProperties;
 import dev.vladefined.taskbridge.core.ApprovalChannel;
 import dev.vladefined.taskbridge.core.DecisionAttempt;
 import dev.vladefined.taskbridge.core.Task;
+import dev.vladefined.taskbridge.access.FolderAccessService;
+import dev.vladefined.taskbridge.access.FolderRequest;
+import dev.vladefined.taskbridge.access.FolderRequestRepository;
 import dev.vladefined.taskbridge.core.MessageDecisionAttempt;
 import dev.vladefined.taskbridge.core.TaskMessage;
 import dev.vladefined.taskbridge.core.TaskMessageRepository;
@@ -43,6 +46,7 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
     private final long chatId;
     private final TaskRepository repo;
     private final TaskMessageRepository messages;
+    private final FolderRequestRepository folderRequests;
     private final ApplicationEventPublisher events;
     private final boolean sendLog;
     private final UiText ui;
@@ -50,8 +54,10 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
     private Thread poller;
 
     public TelegramChannel(BridgeProperties props, ObjectMapper json, TaskRepository repo,
-                           TaskMessageRepository messages, ApplicationEventPublisher events, UiText ui) {
+                           TaskMessageRepository messages, FolderRequestRepository folderRequests,
+                           ApplicationEventPublisher events, UiText ui) {
         this.messages = messages;
+        this.folderRequests = folderRequests;
         this.ui = ui;
         if (props.telegram().botToken() == null || props.telegram().botToken().isBlank()
                 || props.telegram().chatId() == 0) {
@@ -115,6 +121,22 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
         }
     }
 
+    @Override
+    public void requestFolderApproval(FolderRequest r) {
+        long msgId = client.sendMessage(chatId, TelegramFormat.folderRequest(ui, r), java.util.List.of(
+                new Button(ui.t("folder.button.allow"), "fa:" + r.id()),
+                new Button(ui.t("folder.button.reject"), "fr:" + r.id())), null);
+        folderRequests.setTelegramMessageId(r.id(), msgId);
+    }
+
+    @Override
+    public void onFolderRequestUpdated(FolderRequest r) {
+        Long msgId = folderRequests.find(r.id()).map(FolderRequest::telegramMessageId).orElse(null);
+        if (msgId != null) {
+            client.editMessageText(chatId, msgId, TelegramFormat.folderDecided(ui, r));
+        }
+    }
+
     private void sendFile(Task t, Path file, String what) {
         try {
             if (Files.size(file) == 0) {
@@ -149,6 +171,17 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
             return;
         }
         String kind = data.substring(0, colon);
+        if (kind.equals("fa") || kind.equals("fr")) {
+            String rid = data.substring(colon + 1);
+            boolean allow = kind.equals("fa");
+            events.publishEvent(new FolderAccessService.DecisionAttempt(rid, allow, CHANNEL));
+            FolderRequest r = folderRequests.find(rid).orElse(null);
+            String answer = r == null ? ui.t("callback.not-found")
+                    : r.decidedBy() != null && !CHANNEL.equals(r.decidedBy()) ? ui.t("callback.already", r.status())
+                    : allow ? ui.t("callback.allowed") : ui.t("callback.rejected");
+            client.answerCallbackQuery(cbId, answer);
+            return;
+        }
         if (kind.equals("ma") || kind.equals("mr")) {
             String mid = data.substring(colon + 1);
             boolean send = kind.equals("ma");

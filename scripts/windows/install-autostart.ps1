@@ -46,6 +46,10 @@ BRIDGE_LANGUAGE=ru
 BRIDGE_JAR=$jarCopy
 BRIDGE_DATA_DIR=$DataDir
 
+# New folders may be requested from the cloud only inside these directories
+# (comma-separated, e.g. E:\,D:\code). Empty: such requests are refused.
+BRIDGE_ACCESS_ROOTS=
+
 # Optional extra arguments for the bridge, e.g. other folders:
 # BRIDGE_ARGS=--bridge.folders.pibench.path=E:\pibench
 "@ | Set-Content -LiteralPath $envFile -Encoding UTF8

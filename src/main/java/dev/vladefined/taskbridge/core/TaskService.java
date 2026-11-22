@@ -41,6 +41,7 @@ public class TaskService {
 
     private final TaskRepository repo;
     private final TaskMessageRepository messages;
+    private final dev.vladefined.taskbridge.access.FolderRegistry folders;
     private final BridgeProperties props;
     private final List<ApprovalChannel> channels;
     private final ClaudeRunner runner;
@@ -51,8 +52,10 @@ public class TaskService {
     private final ExecutorService executor = Executors.newSingleThreadExecutor(
             r -> new Thread(r, "claude-runner"));
 
-    public TaskService(TaskRepository repo, TaskMessageRepository messages, BridgeProperties props,
+    public TaskService(TaskRepository repo, TaskMessageRepository messages,
+                       dev.vladefined.taskbridge.access.FolderRegistry folders, BridgeProperties props,
                        List<ApprovalChannel> channels, ClaudeRunner runner, Clock clock) {
+        this.folders = folders;
         this.repo = repo;
         this.messages = messages;
         this.props = props;
@@ -65,15 +68,17 @@ public class TaskService {
     public Task submit(NewTask request) {
         String text = request.text() == null ? null : request.text().replace("\r\n", "\n");
         NewTask req = new NewTask(request.folder(), text, request.mode(), request.sessionId(),
-                TaskValidator.cleanSender(request.sender()));
+                TaskValidator.cleanSender(request.sender()), request.extraTools());
         TaskValidator.validate(req, props.maxTaskChars());
-        if (!props.folders().containsKey(req.folder())) {
-            throw new IllegalArgumentException("unknown folder: " + req.folder());
-        }
+        Folder folder = folders.get(req.folder())
+                .orElseThrow(() -> new IllegalArgumentException("unknown folder: " + req.folder()));
+        // one-time tools: same rules as permanent ones; those the folder already has are dropped
+        List<String> extra = dev.vladefined.taskbridge.access.AccessPolicy.checkTools(req.extraTools()).stream()
+                .filter(t -> !folder.allowedTools().contains(t)).toList();
 
         Task task = new Task(newId(), req.folder(), req.mode(), req.sessionId(), req.text(), req.sender(),
                 sha256(req.text()), TaskStatus.PENDING, null, clock.instant(), null, null,
-                newToken(), null, null, null, false, null, null);
+                newToken(), null, null, null, false, null, null, extra.isEmpty() ? null : String.join(",", extra));
         repo.insert(task);
         log.info("task {} received from '{}' for folder {}", task.id(), task.sender(), task.folder());
         for (ApprovalChannel ch : channels) {
@@ -275,10 +280,14 @@ public class TaskService {
             return;
         }
         Task task = repo.find(id).orElseThrow();
-        Folder folder = props.folders().get(task.folder());
         RunResult r;
         try {
-            r = runner.run(task, folder);
+            Folder folder = folders.get(task.folder()).orElse(null);
+            if (folder == null) {
+                r = new RunResult(false, "Folder " + task.folder() + " was removed before the task ran", null, null);
+            } else {
+                r = runner.run(task, withExtraTools(folder, task));
+            }
         } catch (RuntimeException e) {
             log.error("task {} crashed", id, e);
             r = new RunResult(false, "Bridge error: " + e.getMessage(), null, null);
@@ -297,6 +306,16 @@ public class TaskService {
         for (ApprovalChannel ch : channels) {
             safely(() -> ch.onFinished(finished), ch, "onFinished");
         }
+    }
+
+    /** The folder's tools plus the ones approved for this task only. */
+    static Folder withExtraTools(Folder f, Task t) {
+        if (t.extraToolList().isEmpty()) {
+            return f;
+        }
+        List<String> tools = new java.util.ArrayList<>(f.allowedTools());
+        t.extraToolList().stream().filter(x -> !tools.contains(x)).forEach(tools::add);
+        return new Folder(f.path(), List.copyOf(tools), f.timeout());
     }
 
     /** Never re-run something after a restart without asking again. */
