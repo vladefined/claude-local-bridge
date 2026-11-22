@@ -4,3 +4,4 @@ target/
 .idea/
 *.iml
 outputs/
+__pycache__/
