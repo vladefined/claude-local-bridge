@@ -35,7 +35,9 @@ public class TaskRepository {
                     desktop_token TEXT,
                     result TEXT,
                     session_id TEXT,
-                    finished_at INTEGER
+                    finished_at INTEGER,
+                    result_truncated INTEGER NOT NULL DEFAULT 0,
+                    output_path TEXT
                 )""");
     }
 
@@ -81,10 +83,13 @@ public class TaskRepository {
                 id) == 1;
     }
 
-    public void finish(String id, TaskStatus status, String result, String sessionId, Instant at) {
+    public void finish(String id, TaskStatus status, String result, boolean truncated, String outputPath,
+                       String sessionId, Instant at) {
         jdbc.update("""
-                UPDATE tasks SET status = ?, result = ?, session_id = ?, finished_at = ?
-                WHERE id = ?""", status.name(), result, sessionId, at.toEpochMilli(), id);
+                UPDATE tasks SET status = ?, result = ?, result_truncated = ?, output_path = ?,
+                                 session_id = ?, finished_at = ?
+                WHERE id = ?""", status.name(), result, truncated ? 1 : 0, outputPath, sessionId,
+                at.toEpochMilli(), id);
     }
 
     public List<Task> findPendingCreatedBefore(Instant cutoff) {
@@ -116,7 +121,9 @@ public class TaskRepository {
                 rs.getString("desktop_token"),
                 rs.getString("result"),
                 rs.getString("session_id"),
-                instant(rs, "finished_at"));
+                instant(rs, "finished_at"),
+                rs.getInt("result_truncated") != 0,
+                rs.getString("output_path"));
     }
 
     private static Long nullableLong(ResultSet rs, String col) throws SQLException {

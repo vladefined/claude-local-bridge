@@ -136,7 +136,7 @@ class BridgeFlowTest {
 
     @Test
     void approvedTaskRunsOnceAndResultIsReadable() throws Exception {
-        when(runner.run(any(), any())).thenReturn(new RunResult(true, "all good", "sess-1"));
+        when(runner.run(any(), any())).thenReturn(new RunResult(true, "all good", "sess-1", null));
         String id = submit("Run the benchmark");
         assertThat(channel.events).contains("request:" + id);
 
@@ -155,7 +155,7 @@ class BridgeFlowTest {
 
     @Test
     void simultaneousPressesProduceExactlyOneDecision() throws Exception {
-        when(runner.run(any(), any())).thenReturn(new RunResult(true, "ok", null));
+        when(runner.run(any(), any())).thenReturn(new RunResult(true, "ok", null, null));
         String id = submit("race");
         var pool = Executors.newFixedThreadPool(8);
         CountDownLatch go = new CountDownLatch(1);
@@ -176,6 +176,26 @@ class BridgeFlowTest {
         pool.shutdown();
         assertThat(winners).isEqualTo(1);
         assertThat(channel.events.stream().filter(e -> e.startsWith("decided:" + id))).hasSize(1);
+    }
+
+    @Test
+    void longResultIsCutButFullOutputStaysAvailable() throws Exception {
+        String full = "line\n".repeat(2000);                 // 10 000 chars > max-result-chars 3500
+        Path file = tmp.resolve("full-output.txt");
+        java.nio.file.Files.writeString(file, full);
+        when(runner.run(any(), any())).thenReturn(new RunResult(true, full, null, file));
+        String id = submit("produce a lot");
+        tasks.decide(id, true, "telegram");
+        verify(runner, timeout(5000).times(1)).run(any(), any());
+        Thread.sleep(200);
+
+        Task t = tasks.find(id).orElseThrow();
+        assertThat(t.resultTruncated()).isTrue();
+        assertThat(t.result()).hasSize(3500);
+        assertThat(t.outputPath()).isEqualTo(file.toString());
+        mvc.perform(signed(get("/tasks/" + id + "/output"), "GET", "/tasks/" + id + "/output", new byte[0]))
+                .andExpect(status().isOk())
+                .andExpect(result -> assertThat(result.getResponse().getContentAsString()).isEqualTo(full));
     }
 
     @Test

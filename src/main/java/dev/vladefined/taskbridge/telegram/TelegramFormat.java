@@ -1,8 +1,5 @@
 package dev.vladefined.taskbridge.telegram;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import dev.vladefined.taskbridge.core.Task;
 
 /**
@@ -43,19 +40,25 @@ public final class TelegramFormat {
         };
     }
 
-    public static List<String> result(Task t) {
+    /**
+     * One message: the (already shortened) result. The text is cut once more only as a
+     * last guard against Telegram's limit; with the default max-result-chars it never is.
+     */
+    public static String result(Task t) {
         String head = switch (t.status()) {
             case DONE -> "Готово: " + t.id();
             default -> "Ошибка: " + t.id();
         };
         String body = t.result() == null || t.result().isBlank() ? "(пустой ответ)" : t.result();
-        List<String> parts = new ArrayList<>();
-        String first = head + (t.sessionId() != null ? "\nsession: " + t.sessionId() : "") + "\n\n";
-        String all = first + body;
-        for (int i = 0; i < all.length(); i += LIMIT - 96) {
-            parts.add(all.substring(i, Math.min(all.length(), i + LIMIT - 96)));
+        String note = t.resultTruncated()
+                ? "\n…\n(обрезано, первые " + t.result().length() + " символов; полный вывод во вложении)"
+                : "";
+        String headLine = head + (t.sessionId() != null ? "\nsession: " + t.sessionId() : "") + "\n\n";
+        int room = LIMIT - headLine.length() - note.length();
+        if (body.length() > room) {
+            body = body.substring(0, room);
         }
-        return parts;
+        return headLine + body + note;
     }
 
     private static String mode(Task t) {

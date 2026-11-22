@@ -15,7 +15,7 @@ class DesktopChannelTest {
 
     static Task task(String text) {
         return new Task("abc", "pibench", RunMode.CONTINUE, null, text, "cloud <thread>", "a".repeat(64),
-                TaskStatus.PENDING, null, Instant.now(), null, null, "tok", null, null, null);
+                TaskStatus.PENDING, null, Instant.now(), null, null, "tok", null, null, null, false, null);
     }
 
     @Test
@@ -24,6 +24,16 @@ class DesktopChannelTest {
                 "http://127.0.0.1:8766/t/tok", 300);
         assertThat(xml).doesNotContain("arguments=\"evil\"").contains("&lt;/text&gt;");
         assertThat(xml).contains("http://127.0.0.1:8766/t/tok/approve");
+    }
+
+    @Test
+    void truncatedResultMessageFitsTelegramAndSaysSo() {
+        Task t = new Task("abc", "pibench", RunMode.CONTINUE, null, "x", "s", "a".repeat(64),
+                TaskStatus.DONE, "telegram", Instant.now(), null, 1L, "tok", "y".repeat(3500), "sess",
+                Instant.now(), true, "/out/abc.txt");
+        String msg = dev.vladefined.taskbridge.telegram.TelegramFormat.result(t);
+        assertThat(msg.length()).isLessThanOrEqualTo(4096);
+        assertThat(msg).contains("полный вывод во вложении");
     }
 
     @Test

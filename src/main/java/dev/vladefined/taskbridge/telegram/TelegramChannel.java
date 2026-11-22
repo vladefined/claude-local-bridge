@@ -1,5 +1,8 @@
 package dev.vladefined.taskbridge.telegram;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 
 import org.slf4j.Logger;
@@ -29,6 +32,7 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramChannel.class);
     public static final String CHANNEL = "telegram";
+    private static final long MAX_DOCUMENT_BYTES = 49L * 1024 * 1024;
 
     private final TelegramClient client;
     private final long chatId;
@@ -68,8 +72,20 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
 
     @Override
     public void onFinished(Task t) {
-        for (String part : TelegramFormat.result(t)) {
-            client.sendMessage(chatId, part, null, t.telegramMessageId());
+        client.sendMessage(chatId, TelegramFormat.result(t), null, t.telegramMessageId());
+        if (!t.resultTruncated() || t.outputPath() == null) {
+            return;
+        }
+        Path file = Path.of(t.outputPath());
+        try {
+            if (Files.size(file) <= MAX_DOCUMENT_BYTES) {
+                client.sendDocument(chatId, file, "Полный вывод: " + t.id(), t.telegramMessageId());
+            } else {
+                client.sendMessage(chatId, "Полный вывод больше 50 МБ, лежит на ПК: " + file, null,
+                        t.telegramMessageId());
+            }
+        } catch (IOException e) {
+            log.warn("task {}: cannot read output file: {}", t.id(), e.toString());
         }
     }
 

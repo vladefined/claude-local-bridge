@@ -14,6 +14,8 @@ bridge:
   hmac-secret: ${BRIDGE_HMAC_SECRET:}
   approval-ttl: 30m
   max-task-chars: 3000
+  # Longer results are cut in the DB / Telegram / API; the full text is kept in runner.output-dir
+  max-result-chars: 3500
   telegram:
     enabled: ${BRIDGE_TELEGRAM_ENABLED:true}
     bot-token: ${BRIDGE_TELEGRAM_TOKEN:}
@@ -24,6 +26,7 @@ bridge:
   runner:
     command: claude
     default-timeout: 20m
+    output-dir: outputs
   # Folders the remote side may target, by name. Paths and tools are fixed here,
   # never taken from the request.
   folders:

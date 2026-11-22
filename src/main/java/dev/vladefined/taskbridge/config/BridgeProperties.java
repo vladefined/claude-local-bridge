@@ -17,6 +17,7 @@ public record BridgeProperties(
         @DefaultValue("5m") Duration maxClockSkew,
         @DefaultValue("30m") Duration approvalTtl,
         @DefaultValue("3000") int maxTaskChars,
+        @DefaultValue("3500") int maxResultChars,
         Telegram telegram,
         Desktop desktop,
         Runner runner,
@@ -47,7 +48,8 @@ public record BridgeProperties(
 
     public record Runner(
             @DefaultValue("claude") List<String> command,
-            @DefaultValue("20m") Duration defaultTimeout) {
+            @DefaultValue("20m") Duration defaultTimeout,
+            @DefaultValue("outputs") String outputDir) {
     }
 
     public record Folder(

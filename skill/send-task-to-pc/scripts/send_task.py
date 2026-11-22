@@ -33,8 +33,11 @@ def call(method, path, body=b""):
                                  headers={"Content-Type": "application/json", "X-Bridge-Timestamp": ts,
                                           "X-Bridge-Nonce": nonce, "X-Bridge-Signature": sig})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.load(r)
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = r.read()
+            if r.headers.get_content_type() == "application/json":
+                return json.loads(data)
+            return data.decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         sys.exit(f"HTTP {e.code}: {e.read().decode(errors='replace')}")
 
@@ -48,7 +51,7 @@ def main():
     s.add_argument("--session")
     s.add_argument("--sender", default="cloud Claude")
     s.add_argument("--text-file", help="file with the task; stdin if omitted")
-    for name in ("status", "wait"):
+    for name in ("status", "wait", "output"):
         q = sub.add_parser(name)
         q.add_argument("id")
         if name == "wait":
@@ -62,6 +65,8 @@ def main():
             payload["sessionId"] = a.session
         r = call("POST", "/tasks", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
         print(json.dumps(r, ensure_ascii=False))
+    elif a.cmd == "output":
+        sys.stdout.write(call("GET", f"/tasks/{a.id}/output"))
     elif a.cmd == "status":
         print(json.dumps(call("GET", f"/tasks/{a.id}"), ensure_ascii=False, indent=2))
     else:

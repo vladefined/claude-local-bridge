@@ -1,10 +1,15 @@
 package dev.vladefined.taskbridge.telegram;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.UUID;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,6 +48,44 @@ public class TelegramClient {
         return call("sendMessage", body, Duration.ofSeconds(20)).path("message_id").asLong();
     }
 
+    /** Upload a file as a document (Telegram's limit for bots is 50 MB). */
+    public void sendDocument(long chatId, Path file, String caption, Long replyTo) {
+        String boundary = "----bridge" + UUID.randomUUID().toString().replace("-", "");
+        try {
+            var parts = new ByteArrayOutputStream();
+            field(parts, boundary, "chat_id", String.valueOf(chatId));
+            if (caption != null) {
+                field(parts, boundary, "caption", caption);
+            }
+            if (replyTo != null) {
+                field(parts, boundary, "reply_parameters", json.writeValueAsString(
+                        Map.of("message_id", replyTo, "allow_sending_without_reply", true)));
+            }
+            parts.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"document\"; filename=\""
+                    + file.getFileName() + "\"\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            parts.write(Files.readAllBytes(file));
+            parts.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+            HttpRequest req = HttpRequest.newBuilder(URI.create(base + "sendDocument"))
+                    .timeout(Duration.ofMinutes(2))
+                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(parts.toByteArray()))
+                    .build();
+            check("sendDocument", http.send(req, HttpResponse.BodyHandlers.ofByteArray()));
+        } catch (IOException e) {
+            throw new TelegramException("sendDocument: " + e.getClass().getSimpleName());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new TelegramException("sendDocument: interrupted");
+        }
+    }
+
+    private static void field(ByteArrayOutputStream out, String boundary, String name, String value)
+            throws IOException {
+        out.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + name + "\"\r\n\r\n"
+                + value + "\r\n").getBytes(StandardCharsets.UTF_8));
+    }
+
     /** Editing without reply_markup also removes the inline buttons. */
     public void editMessageText(long chatId, long messageId, String text) {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -69,19 +112,22 @@ public class TelegramClient {
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body)))
                     .build();
-            HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
-            JsonNode node = json.readTree(resp.body());
-            if (!node.path("ok").asBoolean(false)) {
-                // Never include the URL: it contains the bot token.
-                throw new TelegramException(method + ": " + node.path("description").asText("HTTP " + resp.statusCode()));
-            }
-            return node.path("result");
+            return check(method, http.send(req, HttpResponse.BodyHandlers.ofByteArray()));
         } catch (IOException e) {
             throw new TelegramException(method + ": " + e.getClass().getSimpleName());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new TelegramException(method + ": interrupted");
         }
+    }
+
+    private JsonNode check(String method, HttpResponse<byte[]> resp) throws IOException {
+        JsonNode node = json.readTree(resp.body());
+        if (!node.path("ok").asBoolean(false)) {
+            // Never include the URL: it contains the bot token.
+            throw new TelegramException(method + ": " + node.path("description").asText("HTTP " + resp.statusCode()));
+        }
+        return node.path("result");
     }
 
     public static class TelegramException extends RuntimeException {

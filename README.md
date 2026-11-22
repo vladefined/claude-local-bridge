@@ -32,6 +32,7 @@ runs until a human has seen exactly what will be sent to Claude Code.
 | Exactly one decision | One atomic `UPDATE ... WHERE status='PENDING'` in SQLite; whichever channel is first wins, the other is edited/removed. Tested with 8 concurrent presses |
 | Approval page can't be reached from outside | It runs on a **separate** loopback port the tunnel never points to, needs a per-task 256-bit token, checks the Host header (DNS rebinding) |
 | Telegram buttons only work for you | Callbacks accepted only from the configured chat/user id |
+| Big outputs can't flood anything | Claude's stdout/stderr stream to files, never held in memory; DB, Telegram and API get the first 3500 chars, the full text is saved as `outputs/<id>.txt`, attached to Telegram as a file and available at `GET /tasks/{id}/output` |
 | No silent runs | Pending tasks expire after 30 min; tasks interrupted by a restart are marked failed, never re-run; every task and decision is kept in SQLite |
 
 ## Run
@@ -61,7 +62,7 @@ and the bridge host must be allowed by its network policy.
 
 ## Status
 
-Tested in CI-like conditions with a fake `claude` binary (25 unit/integration tests
+Tested in CI-like conditions with a fake `claude` binary (27 unit/integration tests
 plus an end-to-end run through the HTTP API, the local approval page and the client).
 Not yet verified: real Telegram delivery and Windows toasts on a real machine.
 Planned: a remote MCP endpoint so any Claude chat can submit tasks.

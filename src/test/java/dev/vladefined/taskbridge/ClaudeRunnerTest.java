@@ -29,13 +29,13 @@ class ClaudeRunnerTest {
 
     static final Folder FOLDER = new Folder("/tmp", List.of("Read", "Bash(git status:*)"), null);
     static final BridgeProperties PROPS = new BridgeProperties("0123456789abcdef0123456789abcdef",
-            Duration.ofMinutes(5), Duration.ofMinutes(30), 3000, null, null,
-            new BridgeProperties.Runner(List.of("claude"), Duration.ofMinutes(20)), Map.of("x", FOLDER));
+            Duration.ofMinutes(5), Duration.ofMinutes(30), 3000, 3500, null, null,
+            new BridgeProperties.Runner(List.of("claude"), Duration.ofMinutes(20), "outputs"), Map.of("x", FOLDER));
     final ClaudeRunner r = new ClaudeRunner(PROPS, new ObjectMapper());
 
     static Task task(RunMode mode, String session, String text) {
         return new Task("abc", "x", mode, session, text, "s", "0".repeat(64), TaskStatus.APPROVED, null,
-                Instant.now(), null, null, null, null, null, null);
+                Instant.now(), null, null, null, null, null, null, false, null);
     }
 
     @Test
@@ -73,12 +73,16 @@ class ClaudeRunnerTest {
                 """);
         Files.setPosixFilePermissions(fake, PosixFilePermissions.fromString("rwx------"));
         BridgeProperties props = new BridgeProperties(PROPS.hmacSecret(), PROPS.maxClockSkew(),
-                PROPS.approvalTtl(), 3000, null, null,
-                new BridgeProperties.Runner(List.of(fake.toString()), Duration.ofSeconds(10)), PROPS.folders());
+                PROPS.approvalTtl(), 3000, 3500, null, null,
+                new BridgeProperties.Runner(List.of(fake.toString()), Duration.ofSeconds(10),
+                        dir.resolve("out").toString()), PROPS.folders());
         var res = new ClaudeRunner(props, new ObjectMapper())
                 .run(task(RunMode.NEW, null, "hello & goodbye"), new Folder(dir.toString(), List.of(), null));
         assertThat(res.ok()).isTrue();
         assertThat(res.text()).isEqualTo("got: hello & goodbye");
         assertThat(res.sessionId()).isEqualTo("s-42");
+        // the full result is saved to <output-dir>/<task id>.txt
+        assertThat(res.outputFile()).isEqualTo(dir.resolve("out").resolve("abc.txt").toAbsolutePath());
+        assertThat(Files.readString(res.outputFile())).isEqualTo("got: hello & goodbye");
     }
 }

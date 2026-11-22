@@ -1,11 +1,15 @@
 package dev.vladefined.taskbridge.api;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -74,6 +78,20 @@ public class TaskController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    /** Full result text when {@code resultTruncated} is true. */
+    @GetMapping(value = "/tasks/{id}/output", produces = "text/plain;charset=UTF-8")
+    public ResponseEntity<Resource> output(
+            @PathVariable String id,
+            @RequestHeader(value = TS, required = false) String ts,
+            @RequestHeader(value = NONCE, required = false) String nonce,
+            @RequestHeader(value = SIG, required = false) String sig) {
+        hmac.verify("GET", "/tasks/" + id + "/output", ts, nonce, sig, new byte[0]);
+        return tasks.find(id)
+                .filter(t -> t.outputPath() != null && Files.isRegularFile(Path.of(t.outputPath())))
+                .map(t -> ResponseEntity.ok((Resource) new FileSystemResource(t.outputPath())))
+                .orElse(ResponseEntity.notFound().build());
+    }
+
     private static Map<String, Object> view(Task t) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", t.id());
@@ -81,6 +99,7 @@ public class TaskController {
         m.put("sha256", t.sha256());
         m.put("decidedBy", t.decidedBy());
         m.put("result", t.result());
+        m.put("resultTruncated", t.resultTruncated());
         m.put("sessionId", t.sessionId());
         return m;
     }

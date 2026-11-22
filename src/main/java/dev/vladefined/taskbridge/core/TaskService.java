@@ -64,7 +64,7 @@ public class TaskService {
 
         Task task = new Task(newId(), req.folder(), req.mode(), req.sessionId(), req.text(), req.sender(),
                 sha256(req.text()), TaskStatus.PENDING, null, clock.instant(), null, null,
-                newToken(), null, null, null);
+                newToken(), null, null, null, false, null);
         repo.insert(task);
         log.info("task {} received from '{}' for folder {}", task.id(), task.sender(), task.folder());
         for (ApprovalChannel ch : channels) {
@@ -119,9 +119,15 @@ public class TaskService {
             r = runner.run(task, folder);
         } catch (RuntimeException e) {
             log.error("task {} crashed", id, e);
-            r = new RunResult(false, "Bridge error: " + e.getMessage(), null);
+            r = new RunResult(false, "Bridge error: " + e.getMessage(), null, null);
         }
-        repo.finish(id, r.ok() ? TaskStatus.DONE : TaskStatus.FAILED, r.text(), r.sessionId(), clock.instant());
+        // The DB and Telegram get a short version; the full output stays in a file on disk.
+        String text = r.text() == null ? "" : r.text();
+        int max = props.maxResultChars();
+        boolean truncated = text.length() > max;
+        String shown = truncated ? text.substring(0, max) : text;
+        repo.finish(id, r.ok() ? TaskStatus.DONE : TaskStatus.FAILED, shown, truncated,
+                r.outputFile() == null ? null : r.outputFile().toString(), r.sessionId(), clock.instant());
         Task finished = repo.find(id).orElseThrow();
         for (ApprovalChannel ch : channels) {
             safely(() -> ch.onFinished(finished), ch, "onFinished");
@@ -132,7 +138,7 @@ public class TaskService {
     private void failInterrupted() {
         for (Task t : repo.findInterrupted()) {
             repo.finish(t.id(), TaskStatus.FAILED, "Interrupted by a bridge restart; not re-run.",
-                    null, clock.instant());
+                    false, null, null, clock.instant());
         }
     }
 

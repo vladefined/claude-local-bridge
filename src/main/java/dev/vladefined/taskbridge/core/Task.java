@@ -18,7 +18,9 @@ public record Task(
         String desktopToken,
         String result,
         String sessionId,
-        Instant finishedAt) {
+        Instant finishedAt,
+        boolean resultTruncated,
+        String outputPath) {
 
     /** First 12 hex chars of the text hash: enough to compare by eye across channels. */
     public String shortHash() {
