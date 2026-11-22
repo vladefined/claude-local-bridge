@@ -30,7 +30,7 @@ class ClaudeRunnerTest {
     static final Folder FOLDER = new Folder("/tmp", List.of("Read", "Bash(git status:*)"), null);
     static final BridgeProperties PROPS = new BridgeProperties("0123456789abcdef0123456789abcdef",
             Duration.ofMinutes(5), Duration.ofMinutes(30), 3000, 3500, null, null,
-            new BridgeProperties.Runner(List.of("claude"), Duration.ofMinutes(20), "outputs"), Map.of("x", FOLDER));
+            new BridgeProperties.Runner(List.of("claude"), Duration.ofMinutes(20), "outputs", Duration.ofDays(30)), Map.of("x", FOLDER));
     final ClaudeRunner r = new ClaudeRunner(PROPS, new ObjectMapper());
 
     static Task task(RunMode mode, String session, String text) {
@@ -75,14 +75,27 @@ class ClaudeRunnerTest {
         BridgeProperties props = new BridgeProperties(PROPS.hmacSecret(), PROPS.maxClockSkew(),
                 PROPS.approvalTtl(), 3000, 3500, null, null,
                 new BridgeProperties.Runner(List.of(fake.toString()), Duration.ofSeconds(10),
-                        dir.resolve("out").toString()), PROPS.folders());
+                        dir.resolve("out").toString(), Duration.ofDays(30)), PROPS.folders());
         var res = new ClaudeRunner(props, new ObjectMapper())
                 .run(task(RunMode.NEW, null, "hello & goodbye"), new Folder(dir.toString(), List.of(), null));
         assertThat(res.ok()).isTrue();
         assertThat(res.text()).isEqualTo("got: hello & goodbye");
         assertThat(res.sessionId()).isEqualTo("s-42");
         // the full result is saved to <output-dir>/<task id>.txt
-        assertThat(res.outputFile()).isEqualTo(dir.resolve("out").resolve("abc.txt").toAbsolutePath());
+        // full result saved as <output-dir>/<folder>/<session id>/<task id>.txt, nothing left in _running
+        Path session = dir.resolve("out").resolve("x").resolve("s-42").toAbsolutePath();
+        assertThat(res.outputFile()).isEqualTo(session.resolve("abc.txt"));
+        assertThat(session.resolve("abc.stdout.json")).exists();
+        assertThat(dir.resolve("out").resolve("x").resolve("_running")).isEmptyDirectory();
         assertThat(Files.readString(res.outputFile())).isEqualTo("got: hello & goodbye");
+    }
+
+    @Test
+    void sessionIdFromOutputCannotEscapeTheOutputFolder() {
+        assertThat(ClaudeRunner.sessionDir("3f2c9a1e-1b2c-4d5e-8f90-1234567890ab"))
+                .isEqualTo("3f2c9a1e-1b2c-4d5e-8f90-1234567890ab");
+        assertThat(ClaudeRunner.sessionDir("..\\..\\Windows")).isEqualTo("_failed");
+        assertThat(ClaudeRunner.sessionDir("../x")).isEqualTo("_failed");
+        assertThat(ClaudeRunner.sessionDir(null)).isEqualTo("_failed");
     }
 }

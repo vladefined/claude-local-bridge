@@ -6,10 +6,12 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,10 +32,10 @@ import dev.vladefined.taskbridge.core.Task;
  * batch file are re-parsed by cmd.exe, so text on the command line could break
  * out of its quoting. Only fixed flags and validated values are arguments.
  *
- * <p>stdout and stderr go straight to files in {@code runner.output-dir}: nothing
+ * <p>stdout and stderr go straight to files under {@code runner.output-dir}: nothing
  * is held in memory while the process runs, and a full pipe can never block it.
- * The full result text is saved as {@code <id>.txt}; callers decide how much of it
- * to show.
+ * The full result text is saved as {@code <folder>/<session id>/<task id>.txt};
+ * callers decide how much of it to show.
  */
 @Component
 public class ClaudeRunner {
@@ -41,6 +43,10 @@ public class ClaudeRunner {
     private static final Logger log = LoggerFactory.getLogger(ClaudeRunner.class);
     /** Bigger stdout is not parsed as JSON (would need that much memory); the raw file is kept. */
     private static final long MAX_PARSE_BYTES = 64L * 1024 * 1024;
+
+    public static final String RUNNING_DIR = "_running";
+    static final String FAILED_DIR = "_failed";
+    private static final Pattern SAFE_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9-]{0,63}");
 
     private final BridgeProperties props;
     private final ObjectMapper json;
@@ -75,7 +81,9 @@ public class ClaudeRunner {
         if (!Files.isDirectory(dir)) {
             return new RunResult(false, "Folder does not exist: " + dir, null, null);
         }
-        Path outDir = Path.of(props.runner().outputDir()).toAbsolutePath();
+        // outputs/<folder>/_running/ while it runs; moved to outputs/<folder>/<session>/ afterwards
+        Path projectOut = Path.of(props.runner().outputDir()).toAbsolutePath().resolve(task.folder());
+        Path outDir = projectOut.resolve(RUNNING_DIR);
         Path stdout = outDir.resolve(task.id() + ".stdout.json");
         Path stderr = outDir.resolve(task.id() + ".stderr.txt");
         Path full = outDir.resolve(task.id() + ".txt");
@@ -117,11 +125,27 @@ public class ClaudeRunner {
                 : parse(p.exitValue(), stdout, stderr);
         try {
             Files.writeString(full, parsed.text(), StandardCharsets.UTF_8);
+            Path finalDir = projectOut.resolve(sessionDir(parsed.sessionId()));
+            Files.createDirectories(finalDir);
+            for (Path f : List.of(stdout, stderr)) {
+                if (Files.exists(f)) {
+                    Files.move(f, finalDir.resolve(f.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+            Path moved = Files.move(full, finalDir.resolve(full.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+            return new RunResult(parsed.ok(), parsed.text(), parsed.sessionId(), moved);
         } catch (IOException e) {
             log.warn("task {}: could not save full output: {}", task.id(), e.toString());
             return parsed;
         }
-        return new RunResult(parsed.ok(), parsed.text(), parsed.sessionId(), full);
+    }
+
+    /**
+     * The session id comes from Claude's output, i.e. from outside: it only becomes a
+     * directory name if it looks like an id, so it can never be "..\\..\\Windows".
+     */
+    public static String sessionDir(String sessionId) {
+        return sessionId != null && SAFE_ID.matcher(sessionId).matches() ? sessionId : FAILED_DIR;
     }
 
     RunResult parse(int exitCode, Path stdout, Path stderr) {

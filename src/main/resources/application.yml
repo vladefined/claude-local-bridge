@@ -26,7 +26,8 @@ bridge:
   runner:
     command: claude
     default-timeout: 20m
-    output-dir: outputs
+    output-dir: outputs          # outputs/<folder>/<session id>/<task id>.txt
+    output-retention: 30d        # 0 = keep forever; the DB row (short result) is always kept
   # Folders the remote side may target, by name. Paths and tools are fixed here,
   # never taken from the request.
   folders:
