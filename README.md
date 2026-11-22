@@ -53,6 +53,26 @@ If `claude` is not found, set `bridge.runner.command` to the full path of `claud
 Messages, toasts and the local page are in English; set `$env:BRIDGE_LANGUAGE = "ru"`
 (or `bridge.ui.language`) for Russian. Texts live in `src/main/resources/ui/<language>.properties`.
 
+### In the background on Windows
+
+`scripts/windows/` starts the bridge and the Cloudflare tunnel at logon, without
+windows and without admin rights:
+
+```powershell
+mvn package
+powershell -ExecutionPolicy Bypass -File scripts\windows\install-autostart.ps1
+```
+
+This creates `%LOCALAPPDATA%\claude-local-bridge\` with a copy of the jar, the start/stop
+scripts and `bridge.env` (KEY=VALUE settings with a freshly generated
+`BRIDGE_HMAC_SECRET`; existing settings are never overwritten), and a shortcut in the
+Startup folder. Fill `BRIDGE_TELEGRAM_TOKEN` and `BRIDGE_TELEGRAM_CHAT_ID` in
+`bridge.env`, then run `start-bridge.ps1` from that folder (or log in again).
+The bridge runs as `javaw` with logs in `<data dir>\logs\bridge.log`; the tunnel uses
+`%USERPROFILE%\.cloudflared\config.yml` and logs to `logs\cloudflared.log`.
+`stop-bridge.ps1` stops both. After rebuilding, stop the bridge and run
+`install-autostart.ps1` again to update the jar copy.
+
 On Windows the toast buttons decide in the background: at startup the bridge
 registers a `claude-bridge:` URL handler for the current user (HKCU, no admin) that
 POSTs the decision to the local page, so no browser tab opens. Clicking the toast
