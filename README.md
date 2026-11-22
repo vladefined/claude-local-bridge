@@ -25,14 +25,15 @@ runs until a human has seen exactly what will be sent to Claude Code.
 
 | Guarantee | Mechanism |
 |---|---|
-| Only the agent holding the key can submit | HMAC-SHA256 over timestamp, nonce, method, path and raw body; 5-min window; nonces remembered (no replay); constant-time compare |
+| Only someone holding the key can submit | HMAC-SHA256 over timestamp, nonce, method, path and raw body; 5-min window; nonces remembered (no replay); constant-time compare |
 | What you see is what runs | Plain-text messages only (no Markdown/HTML parse mode); text with invisible or reordering characters (bidi overrides, zero-width, control chars) is **refused**, not shown; SHA-256 prefix shown in every channel |
 | The remote side picks from a menu | Folder is a name from config, never a path; allowed tools are per folder in config; unknown JSON fields are rejected; a resume session id must look like an id (it can't start with `-` and become a CLI flag) |
 | No command-line injection on Windows | Task text goes to `claude -p` via **stdin**, never as an argument (`.cmd` shims re-parse arguments through cmd.exe) |
 | Exactly one decision | One atomic `UPDATE ... WHERE status='PENDING'` in SQLite; whichever channel is first wins, the other is edited/removed. Tested with 8 concurrent presses |
-| Approval page can't be reached from outside | It runs on a **separate** loopback port the tunnel never points to, needs a per-task 256-bit token, checks the Host header (DNS rebinding) |
+| Approval page can't be reached from outside | It runs on a **separate** loopback port the tunnel never points to, needs a per-task 256-bit token (good for one decision), checks the Host header (DNS rebinding) |
 | Telegram buttons only work for you | Callbacks accepted only from the configured chat/user id |
 | Big outputs can't flood anything | Claude's stdout/stderr stream to files, never held in memory; DB, Telegram and API get the first 3500 chars, the full text is saved as `outputs/<folder>/<session id>/<task id>.txt` (deleted after `output-retention`, 30 days by default), attached to Telegram as a file and available at `GET /tasks/{id}/output` |
+| The agent can't approve its own task | The key keeps outsiders out, but the agent that sends tasks usually has a shell and can read its own key, so the signature is not what stops it. The human approval is: decisions only come from your Telegram account or from the local page on your PC, and the agent can reach neither |
 | No silent runs | Pending tasks expire after 30 min; tasks interrupted by a restart are marked failed, never re-run; every task and decision is kept in SQLite |
 
 ## Run
@@ -62,9 +63,11 @@ and the bridge host must be allowed by its network policy.
 
 ## Status
 
-Tested in CI-like conditions with a fake `claude` binary (30 unit/integration tests
-plus an end-to-end run through the HTTP API, the local approval page and the client).
-Not yet verified: real Telegram delivery and Windows toasts on a real machine.
+30 unit/integration tests, plus an end-to-end run with a fake `claude` binary through
+the HTTP API, the local approval page and the client. Verified on a real Windows 11
+machine: signed request, Telegram approval with message edit, Windows toast approval,
+real `claude -p` run and the result sent back. Not yet used from a cloud agent
+through a tunnel.
 Planned: a remote MCP endpoint so any Claude chat can submit tasks.
 
 ## Authorship
