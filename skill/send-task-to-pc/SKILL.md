@@ -50,6 +50,7 @@ Statuses: `PENDING` (waiting for the owner), `REJECTED`, `EXPIRED` (no answer in
 30 min), `RUNNING`, `DONE`, `FAILED`. On `REJECTED` or `EXPIRED`, do not resend the
 same task; tell the owner and ask what to change.
 
+`summary` is the agent's own one-line "SUMMARY:" (may be null; it is removed from `result`).
 `result` is cut to 3500 characters; `resultTruncated` tells you whether it was. Fetch
 the full text with `output` only if you need it.
 

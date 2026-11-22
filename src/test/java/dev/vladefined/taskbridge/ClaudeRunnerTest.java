@@ -30,12 +30,12 @@ class ClaudeRunnerTest {
     static final Folder FOLDER = new Folder("/tmp", List.of("Read", "Bash(git status:*)"), null);
     static final BridgeProperties PROPS = new BridgeProperties("0123456789abcdef0123456789abcdef",
             Duration.ofMinutes(5), Duration.ofMinutes(30), 3000, 3500, null, null,
-            new BridgeProperties.Runner(List.of("claude"), Duration.ofMinutes(20), "outputs", Duration.ofDays(30)), Map.of("x", FOLDER));
+            new BridgeProperties.Runner(List.of("claude"), Duration.ofMinutes(20), "outputs", Duration.ofDays(30), BridgeProperties.Runner.DEFAULT_SUMMARY_PROMPT), Map.of("x", FOLDER));
     final ClaudeRunner r = new ClaudeRunner(PROPS, new ObjectMapper());
 
     static Task task(RunMode mode, String session, String text) {
         return new Task("abc", "x", mode, session, text, "s", "0".repeat(64), TaskStatus.APPROVED, null,
-                Instant.now(), null, null, null, null, null, null, false, null);
+                Instant.now(), null, null, null, null, null, null, false, null, null);
     }
 
     @Test
@@ -44,7 +44,15 @@ class ClaudeRunnerTest {
         List<String> cmd = r.buildCommand(task(RunMode.CONTINUE, null, evil), FOLDER);
         assertThat(cmd).doesNotContain(evil)
                 .containsExactly("claude", "-p", "--output-format", "json", "--continue",
+                        "--append-system-prompt", BridgeProperties.Runner.DEFAULT_SUMMARY_PROMPT,
                         "--allowedTools", "Read,Bash(git status:*)");
+    }
+
+    @Test
+    void summaryPromptCannotCarryCmdMetacharacters() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new BridgeProperties.Runner(
+                List.of("claude"), Duration.ofMinutes(1), "o", Duration.ZERO, "say \"hi\" & del"))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -75,7 +83,7 @@ class ClaudeRunnerTest {
         BridgeProperties props = new BridgeProperties(PROPS.hmacSecret(), PROPS.maxClockSkew(),
                 PROPS.approvalTtl(), 3000, 3500, null, null,
                 new BridgeProperties.Runner(List.of(fake.toString()), Duration.ofSeconds(10),
-                        dir.resolve("out").toString(), Duration.ofDays(30)), PROPS.folders());
+                        dir.resolve("out").toString(), Duration.ofDays(30), ""), PROPS.folders());
         var res = new ClaudeRunner(props, new ObjectMapper())
                 .run(task(RunMode.NEW, null, "hello & goodbye"), new Folder(dir.toString(), List.of(), null));
         assertThat(res.ok()).isTrue();

@@ -20,7 +20,9 @@ public record Task(
         String sessionId,
         Instant finishedAt,
         boolean resultTruncated,
-        String outputPath) {
+        String outputPath,
+        /** The agent's own one-line summary of what it did, if it wrote one. */
+        String summary) {
 
     /** First 12 hex chars of the text hash: enough to compare by eye across channels. */
     public String shortHash() {

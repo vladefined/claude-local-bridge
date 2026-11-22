@@ -27,7 +27,8 @@ import dev.vladefined.taskbridge.core.TaskRepository;
 import dev.vladefined.taskbridge.core.TaskStatus;
 
 /**
- * Approval on the PC itself: a Windows toast whose buttons open a local page.
+ * Approval on the PC itself: a Windows toast whose buttons decide in the background
+ * (through {@link ProtocolHandler}) or, as a fallback, open a local page.
  *
  * <p>The local page runs on its OWN port, bound to 127.0.0.1, separate from the
  * API port. The tunnel forwards to the API port from localhost, so a "loopback
@@ -48,6 +49,8 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
     private final int port;
     private final int previewChars;
     private final boolean windows;
+    private final boolean wantProtocol;
+    private volatile boolean protocolReady;
     private HttpServer server;
 
     @Autowired
@@ -64,6 +67,7 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
         this.port = props.desktop().port();
         this.previewChars = props.desktop().toastPreviewChars();
         this.windows = windows;
+        this.wantProtocol = props.desktop().protocolButtons();
         if (!windows) {
             log.warn("Desktop toasts need Windows; the local approval page still works on port {}", port);
         }
@@ -76,7 +80,7 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
     @Override
     public void requestApproval(Task t) {
         if (windows) {
-            toaster.show(t.id(), ToastXml.build(t, pageUrl(t), previewChars));
+            toaster.show(t.id(), ToastXml.build(t, pageUrl(t), protocolReady, previewChars));
         }
     }
 
@@ -84,6 +88,13 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
     public void onDecided(Task t) {
         if (windows) {
             toaster.remove(t.id());
+        }
+    }
+
+    @Override
+    public void onFinished(Task t) {
+        if (windows) {
+            toaster.show(t.id(), ToastXml.finished(t));
         }
     }
 
@@ -179,6 +190,15 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.start();
         log.info("local approval page on http://127.0.0.1:{}", port);
+        if (windows && wantProtocol) {
+            try {
+                log.info("toast buttons handled in the background by {}", ProtocolHandler.register(port));
+                protocolReady = true;
+            } catch (IOException | RuntimeException e) {
+                log.warn("could not register the claude-bridge: handler ({}); toast buttons will open the page",
+                        e.toString());
+            }
+        }
     }
 
     @Override

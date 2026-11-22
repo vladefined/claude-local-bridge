@@ -49,7 +49,9 @@ public record BridgeProperties(
     public record Desktop(
             @DefaultValue("false") boolean enabled,
             @DefaultValue("8766") int port,
-            @DefaultValue("300") int toastPreviewChars) {
+            @DefaultValue("300") int toastPreviewChars,
+            /** Toast buttons decide in the background via a claude-bridge: URL handler, no browser. */
+            @DefaultValue("true") boolean protocolButtons) {
     }
 
     public record Runner(
@@ -57,7 +59,25 @@ public record BridgeProperties(
             @DefaultValue("20m") Duration defaultTimeout,
             @DefaultValue("outputs") String outputDir,
             /** Full output files older than this are deleted; 0 keeps them forever. */
-            @DefaultValue("30d") Duration outputRetention) {
+            @DefaultValue("30d") Duration outputRetention,
+            /**
+             * Appended to Claude's system prompt (--append-system-prompt) so that it ends
+             * its answer with a "SUMMARY: ..." line. Empty turns it off. It is a
+             * command-line argument, so characters cmd.exe treats specially are refused.
+             */
+            @DefaultValue(Runner.DEFAULT_SUMMARY_PROMPT) String summaryPrompt) {
+
+        public static final String DEFAULT_SUMMARY_PROMPT =
+                "When you finish, end your final answer with one separate last line that starts with "
+                + "SUMMARY: and says in one or two short sentences what you did and the outcome, "
+                + "in the language of the task.";
+
+        public Runner {
+            if (summaryPrompt != null && summaryPrompt.matches("(?s).*[\"%^&|<>!\r\n].*")) {
+                throw new IllegalStateException(
+                        "bridge.runner.summary-prompt must not contain \" % ^ & | < > ! or line breaks");
+            }
+        }
     }
 
     public record Folder(

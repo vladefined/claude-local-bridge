@@ -26,7 +26,7 @@ class OutputCleanerTest {
     static OutputCleaner cleaner(Path root, Duration retention) {
         var props = new BridgeProperties("0123456789abcdef0123456789abcdef", Duration.ofMinutes(5),
                 Duration.ofMinutes(30), 3000, 3500, null, null,
-                new BridgeProperties.Runner(List.of("claude"), Duration.ofMinutes(20), root.toString(), retention),
+                new BridgeProperties.Runner(List.of("claude"), Duration.ofMinutes(20), root.toString(), retention, ""),
                 Map.of("pibench", new Folder("/tmp", List.of(), null)));
         return new OutputCleaner(props, Clock.fixed(NOW, ZoneOffset.UTC));
     }

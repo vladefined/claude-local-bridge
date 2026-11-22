@@ -51,6 +51,16 @@ java -jar target/claude-local-bridge-0.1.0.jar
 Folders, tools and timeouts are in `src/main/resources/application.yml`.
 If `claude` is not found, set `bridge.runner.command` to the full path of `claude.exe`.
 
+On Windows the toast buttons decide in the background: at startup the bridge
+registers a `claude-bridge:` URL handler for the current user (HKCU, no admin) that
+POSTs the decision to the local page, so no browser tab opens. Clicking the toast
+body still opens the page. Set `bridge.desktop.protocol-buttons: false` to have the
+buttons open the page instead.
+
+Claude is asked (via `--append-system-prompt`, configurable as
+`bridge.runner.summary-prompt`) to end with a `SUMMARY:` line. It is shown first in
+Telegram and in a toast when the task finishes, and returned as `summary` by the API.
+
 Expose port 8765 (API only) with a tunnel, e.g. a named Cloudflare Tunnel on your
 domain. Do **not** expose 8766 (local approval page).
 

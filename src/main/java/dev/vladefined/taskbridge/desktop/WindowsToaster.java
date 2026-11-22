@@ -31,12 +31,12 @@ public class WindowsToaster {
                 + "$t = New-Object Windows.UI.Notifications.ToastNotification $x\n"
                 + "$t.Tag = '" + tag + "'; $t.Group = '" + GROUP + "'\n"
                 + "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('" + APP_ID + "').Show($t)\n";
-        run(script);
+        runPowerShell(script);
     }
 
     public void remove(String tag) {
         requireSafeTag(tag);
-        run(PRELUDE + "[Windows.UI.Notifications.ToastNotificationManager]::History.Remove('"
+        runPowerShell(PRELUDE + "[Windows.UI.Notifications.ToastNotificationManager]::History.Remove('"
                 + tag + "', '" + GROUP + "', '" + APP_ID + "')\n");
     }
 
@@ -50,7 +50,7 @@ public class WindowsToaster {
         }
     }
 
-    private static void run(String script) {
+    static void runPowerShell(String script) {
         try {
             Process p = new ProcessBuilder(List.of("powershell.exe", "-NoProfile", "-NonInteractive",
                     "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedCommand(script)))

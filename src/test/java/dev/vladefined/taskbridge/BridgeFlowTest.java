@@ -140,7 +140,8 @@ class BridgeFlowTest {
 
     @Test
     void approvedTaskRunsOnceAndResultIsReadable() throws Exception {
-        when(runner.run(any(), any())).thenReturn(new RunResult(true, "all good", "sess-1", null));
+        when(runner.run(any(), any())).thenReturn(
+                new RunResult(true, "all good\n\nSUMMARY: ran it, all green", "sess-1", null));
         String id = submit("Run the benchmark");
         assertThat(channel.events).contains("request:" + id);
 
@@ -153,7 +154,8 @@ class BridgeFlowTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("DONE"))
                 .andExpect(jsonPath("$.decidedBy").value("desktop"))
-                .andExpect(jsonPath("$.result").value("all good"));
+                .andExpect(jsonPath("$.result").value("all good"))
+                .andExpect(jsonPath("$.summary").value("ran it, all green"));
         assertThat(channel.events).contains("decided:" + id + ":APPROVED:desktop", "finished:" + id + ":DONE");
     }
 
