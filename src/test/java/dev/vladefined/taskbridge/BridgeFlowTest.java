@@ -30,6 +30,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -48,6 +49,9 @@ import dev.vladefined.taskbridge.runner.RunResult;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+// Close the Spring context (and its SQLite connection) before JUnit deletes
+// the @TempDir; on Windows an open t.db cannot be deleted.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class BridgeFlowTest {
 
     @TempDir
