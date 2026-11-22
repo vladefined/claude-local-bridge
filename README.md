@@ -10,7 +10,7 @@ cloud agent ──signed POST──▶ bridge (your PC)   ──▶ Telegram: [A
                                     │                ──▶ Windows toast: [Approve] [Reject]
                                     │  first press wins, the other channel is updated
                                     ▼
-                          claude -p in E:\project  ──▶ result to Telegram + GET /tasks/{id}
+                          claude -p in E:\project  ──▶ result to Telegram + GET /tasks/{id}, /progress, /log
 ```
 
 ## Why
@@ -60,6 +60,13 @@ buttons open the page instead.
 Claude is asked (via `--append-system-prompt`, configurable as
 `bridge.runner.summary-prompt`) to end with a `SUMMARY:` line. It is shown first in
 Telegram and in a toast when the task finishes, and returned as `summary` by the API.
+
+Claude runs with `--output-format stream-json --verbose`, so every message and tool
+call is written to `<task id>.stdout.json` as it happens. The caller can ask what the
+agent is doing with `GET /tasks/{id}/progress` (status, `decidedBy`, last activity and
+the last 15 steps such as `→ Bash(mvn test)`), and after the run read the whole thing
+as a readable log with `GET /tasks/{id}/log` (`<task id>.log.txt`). The log is also
+attached to the Telegram result (`bridge.telegram.send-log: false` turns that off).
 
 Expose port 8765 (API only) with a tunnel, e.g. a named Cloudflare Tunnel on your
 domain. Do **not** expose 8766 (local approval page).

@@ -20,6 +20,7 @@ import dev.vladefined.taskbridge.core.ApprovalChannel;
 import dev.vladefined.taskbridge.core.DecisionAttempt;
 import dev.vladefined.taskbridge.core.Task;
 import dev.vladefined.taskbridge.core.TaskRepository;
+import dev.vladefined.taskbridge.runner.ClaudeRunner;
 import dev.vladefined.taskbridge.telegram.TelegramClient.Button;
 
 /**
@@ -38,6 +39,7 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
     private final long chatId;
     private final TaskRepository repo;
     private final ApplicationEventPublisher events;
+    private final boolean sendLog;
     private volatile boolean running;
     private Thread poller;
 
@@ -52,6 +54,7 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
         this.chatId = props.telegram().chatId();
         this.repo = repo;
         this.events = events;
+        this.sendLog = props.telegram().sendLog();
     }
 
     @Override
@@ -73,19 +76,30 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
     @Override
     public void onFinished(Task t) {
         client.sendMessage(chatId, TelegramFormat.result(t), null, t.telegramMessageId());
-        if (!t.resultTruncated() || t.outputPath() == null) {
-            return;
+        if (t.resultTruncated() && t.outputPath() != null) {
+            sendFile(t, Path.of(t.outputPath()), "Полный вывод");
         }
-        Path file = Path.of(t.outputPath());
+        if (sendLog) {
+            Path runLog = ClaudeRunner.sibling(t, ClaudeRunner.LOG_SUFFIX);
+            if (runLog != null && Files.isRegularFile(runLog)) {
+                sendFile(t, runLog, "Лог выполнения");
+            }
+        }
+    }
+
+    private void sendFile(Task t, Path file, String what) {
         try {
+            if (Files.size(file) == 0) {
+                return;
+            }
             if (Files.size(file) <= MAX_DOCUMENT_BYTES) {
-                client.sendDocument(chatId, file, "Полный вывод: " + t.id(), t.telegramMessageId());
+                client.sendDocument(chatId, file, what + ": " + t.id(), t.telegramMessageId());
             } else {
-                client.sendMessage(chatId, "Полный вывод больше 50 МБ, лежит на ПК: " + file, null,
+                client.sendMessage(chatId, what + " больше 50 МБ, лежит на ПК: " + file, null,
                         t.telegramMessageId());
             }
         } catch (IOException e) {
-            log.warn("task {}: cannot read output file: {}", t.id(), e.toString());
+            log.warn("task {}: cannot read {}: {}", t.id(), file, e.toString());
         }
     }
 

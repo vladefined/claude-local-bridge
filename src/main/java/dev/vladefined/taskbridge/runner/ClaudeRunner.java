@@ -17,7 +17,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.vladefined.taskbridge.config.BridgeProperties;
@@ -36,13 +35,20 @@ import dev.vladefined.taskbridge.core.Task;
  * is held in memory while the process runs, and a full pipe can never block it.
  * The full result text is saved as {@code <folder>/<session id>/<task id>.txt};
  * callers decide how much of it to show.
+ *
+ * <p>Claude runs with {@code --output-format stream-json --verbose}: every message and
+ * tool call is one line in {@code <task id>.stdout.json}. While it runs, that file is
+ * what {@link StreamLog#recentSteps} reads for progress; afterwards a readable
+ * transcript is written next to it as {@code <task id>.log.txt}.
  */
 @Component
 public class ClaudeRunner {
 
     private static final Logger log = LoggerFactory.getLogger(ClaudeRunner.class);
-    /** Bigger stdout is not parsed as JSON (would need that much memory); the raw file is kept. */
-    private static final long MAX_PARSE_BYTES = 64L * 1024 * 1024;
+    /** Bigger stdout is not parsed (a single line could need that much memory); the raw file is kept. */
+    private static final long MAX_PARSE_BYTES = 256L * 1024 * 1024;
+    public static final String STDOUT_SUFFIX = ".stdout.json";
+    public static final String LOG_SUFFIX = ".log.txt";
 
     public static final String RUNNING_DIR = "_running";
     static final String FAILED_DIR = "_failed";
@@ -60,7 +66,8 @@ public class ClaudeRunner {
         List<String> cmd = new ArrayList<>(props.runner().command());
         cmd.add("-p");
         cmd.add("--output-format");
-        cmd.add("json");
+        cmd.add("stream-json");
+        cmd.add("--verbose");     // required by stream-json in -p mode
         switch (task.mode()) {
             case NEW -> { }
             case CONTINUE -> cmd.add("--continue");
@@ -89,9 +96,10 @@ public class ClaudeRunner {
         // outputs/<folder>/_running/ while it runs; moved to outputs/<folder>/<session>/ afterwards
         Path projectOut = Path.of(props.runner().outputDir()).toAbsolutePath().resolve(task.folder());
         Path outDir = projectOut.resolve(RUNNING_DIR);
-        Path stdout = outDir.resolve(task.id() + ".stdout.json");
+        Path stdout = runningStdout(task);
         Path stderr = outDir.resolve(task.id() + ".stderr.txt");
         Path full = outDir.resolve(task.id() + ".txt");
+        Path transcript = outDir.resolve(task.id() + LOG_SUFFIX);
         Duration timeout = folder.timeout() != null ? folder.timeout() : props.runner().defaultTimeout();
         List<String> cmd = buildCommand(task, folder);
         log.info("task {}: running {} in {}", task.id(), cmd, dir);
@@ -130,9 +138,10 @@ public class ClaudeRunner {
                 : parse(p.exitValue(), stdout, stderr);
         try {
             Files.writeString(full, parsed.text(), StandardCharsets.UTF_8);
+            writeTranscript(task, stdout, transcript);
             Path finalDir = projectOut.resolve(sessionDir(parsed.sessionId()));
             Files.createDirectories(finalDir);
-            for (Path f : List.of(stdout, stderr)) {
+            for (Path f : List.of(stdout, stderr, transcript)) {
                 if (Files.exists(f)) {
                     Files.move(f, finalDir.resolve(f.getFileName()), StandardCopyOption.REPLACE_EXISTING);
                 }
@@ -142,6 +151,30 @@ public class ClaudeRunner {
         } catch (IOException e) {
             log.warn("task {}: could not save full output: {}", task.id(), e.toString());
             return parsed;
+        }
+    }
+
+    /** Where the live stream of a running task is written. */
+    public Path runningStdout(Task task) {
+        return Path.of(props.runner().outputDir()).toAbsolutePath().resolve(task.folder())
+                .resolve(RUNNING_DIR).resolve(task.id() + STDOUT_SUFFIX);
+    }
+
+    /** A file saved next to the finished task's result file ({@code <task id>.txt}), or null. */
+    public static Path sibling(Task task, String suffix) {
+        if (task.outputPath() == null) {
+            return null;
+        }
+        return Path.of(task.outputPath()).resolveSibling(task.id() + suffix);
+    }
+
+    private void writeTranscript(Task task, Path stdout, Path transcript) {
+        try {
+            if (Files.exists(stdout) && Files.size(stdout) <= MAX_PARSE_BYTES) {
+                StreamLog.writeTranscript(stdout, transcript, json);
+            }
+        } catch (IOException | RuntimeException e) {
+            log.warn("task {}: could not write the transcript: {}", task.id(), e.toString());
         }
     }
 
@@ -157,14 +190,12 @@ public class ClaudeRunner {
         try {
             long size = Files.size(stdout);
             if (size > 0 && size <= MAX_PARSE_BYTES) {
-                JsonNode node = json.readTree(stdout.toFile());
-                if (node != null && node.has("result")) {
-                    boolean isError = node.path("is_error").asBoolean(false);
-                    return new RunResult(exitCode == 0 && !isError, node.path("result").asText(""),
-                            node.path("session_id").asText(null), null);
+                StreamLog.Final fin = StreamLog.findFinal(stdout, json);
+                if (fin != null) {
+                    return new RunResult(exitCode == 0 && !fin.isError(), fin.result(), fin.sessionId(), null);
                 }
             }
-            String raw = size > 0 && size <= MAX_PARSE_BYTES ? Files.readString(stdout) : "";
+            String raw = size > 0 && size <= MAX_PARSE_BYTES ? tailOf(stdout) : "";
             return new RunResult(false, "exit " + exitCode
                     + (raw.isBlank() ? "" : ": " + raw.strip())
                     + (size > MAX_PARSE_BYTES ? " (stdout too large to parse, see " + stdout + ")" : "")
@@ -172,6 +203,12 @@ public class ClaudeRunner {
         } catch (IOException e) {
             return new RunResult(false, "exit " + exitCode + ": unreadable output" + tail(stderr), null, null);
         }
+    }
+
+    /** Last part of stdout, for error messages (a stream can be long). */
+    private static String tailOf(Path stdout) throws IOException {
+        String s = Files.readString(stdout, StandardCharsets.UTF_8);
+        return s.length() > 2000 ? "…" + s.substring(s.length() - 2000) : s;
     }
 
     /** Last part of stderr, for error messages. */

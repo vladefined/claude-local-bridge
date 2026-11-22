@@ -3,6 +3,9 @@ package dev.vladefined.taskbridge.core;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Instant;
@@ -23,6 +26,9 @@ import dev.vladefined.taskbridge.config.BridgeProperties;
 import dev.vladefined.taskbridge.config.BridgeProperties.Folder;
 import dev.vladefined.taskbridge.runner.ClaudeRunner;
 import dev.vladefined.taskbridge.runner.RunResult;
+import dev.vladefined.taskbridge.runner.StreamLog;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.annotation.PreDestroy;
 
@@ -38,6 +44,7 @@ public class TaskService {
     private final List<ApprovalChannel> channels;
     private final ClaudeRunner runner;
     private final Clock clock;
+    private final ObjectMapper json = new ObjectMapper();
     private final SecureRandom random = new SecureRandom();
     // One task at a time: two Claude sessions continuing the same folder would collide.
     private final ExecutorService executor = Executors.newSingleThreadExecutor(
@@ -75,6 +82,36 @@ public class TaskService {
 
     public Optional<Task> find(String id) {
         return repo.find(id);
+    }
+
+    /**
+     * What the agent is doing / did: the last steps of its event stream.
+     *
+     * @param lastActivity when the stream file last changed (null if there is none yet)
+     */
+    public record Progress(Task task, List<String> steps, Instant lastActivity) {
+    }
+
+    public static final int PROGRESS_STEPS = 15;
+
+    public Optional<Progress> progress(String id) {
+        return repo.find(id).map(t -> {
+            Path stream = switch (t.status()) {
+                case RUNNING -> runner.runningStdout(t);
+                case DONE, FAILED -> ClaudeRunner.sibling(t, ClaudeRunner.STDOUT_SUFFIX);
+                default -> null;
+            };
+            if (stream == null || !Files.isRegularFile(stream)) {
+                return new Progress(t, List.of(), null);
+            }
+            try {
+                return new Progress(t, StreamLog.recentSteps(stream, PROGRESS_STEPS, json),
+                        Files.getLastModifiedTime(stream).toInstant());
+            } catch (IOException e) {
+                log.warn("task {}: cannot read progress: {}", id, e.toString());
+                return new Progress(t, List.of(), null);
+            }
+        });
     }
 
     @EventListener

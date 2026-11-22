@@ -51,7 +51,7 @@ def main():
     s.add_argument("--session")
     s.add_argument("--sender", default="cloud Claude")
     s.add_argument("--text-file", help="file with the task; stdin if omitted")
-    for name in ("status", "wait", "output"):
+    for name in ("status", "wait", "output", "progress", "log"):
         q = sub.add_parser(name)
         q.add_argument("id")
         if name == "wait":
@@ -67,6 +67,15 @@ def main():
         print(json.dumps(r, ensure_ascii=False))
     elif a.cmd == "output":
         sys.stdout.write(call("GET", f"/tasks/{a.id}/output"))
+    elif a.cmd == "log":
+        sys.stdout.write(call("GET", f"/tasks/{a.id}/log"))
+    elif a.cmd == "progress":
+        r = call("GET", f"/tasks/{a.id}/progress")
+        print(f"status: {r['status']}" + (f" (decided via {r['decidedBy']})" if r.get("decidedBy") else ""))
+        if r.get("lastActivity"):
+            print(f"last activity: {r['lastActivity']}")
+        for s in r.get("steps") or []:
+            print(s)
     elif a.cmd == "status":
         print(json.dumps(call("GET", f"/tasks/{a.id}"), ensure_ascii=False, indent=2))
     else:
