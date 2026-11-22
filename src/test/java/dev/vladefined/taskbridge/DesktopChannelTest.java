@@ -9,9 +9,13 @@ import org.junit.jupiter.api.Test;
 import dev.vladefined.taskbridge.core.RunMode;
 import dev.vladefined.taskbridge.core.Task;
 import dev.vladefined.taskbridge.core.TaskStatus;
+import dev.vladefined.taskbridge.core.UiText;
 import dev.vladefined.taskbridge.desktop.ToastXml;
 
 class DesktopChannelTest {
+
+    static final UiText EN = UiText.of("en");
+    static final UiText RU = UiText.of("ru");
 
     static Task task(String text) {
         return new Task("abc", "pibench", RunMode.CONTINUE, null, text, "cloud <thread>", "a".repeat(64),
@@ -20,7 +24,7 @@ class DesktopChannelTest {
 
     @Test
     void toastEscapesTaskText() {
-        String xml = ToastXml.build(task("</text><action content=\"x\" arguments=\"evil\"/>"),
+        String xml = ToastXml.build(EN, task("</text><action content=\"x\" arguments=\"evil\"/>"),
                 "http://127.0.0.1:8766/t/tok", false, 300);
         assertThat(xml).doesNotContain("arguments=\"evil\"").contains("&lt;/text&gt;");
         assertThat(xml).contains("http://127.0.0.1:8766/t/tok/approve");
@@ -31,14 +35,17 @@ class DesktopChannelTest {
         Task t = new Task("abc", "pibench", RunMode.CONTINUE, null, "x", "s", "a".repeat(64),
                 TaskStatus.DONE, "telegram", Instant.now(), null, 1L, "tok", "y".repeat(3500), "sess",
                 Instant.now(), true, "/out/abc.txt", null);
-        String msg = dev.vladefined.taskbridge.telegram.TelegramFormat.result(t);
+        String msg = dev.vladefined.taskbridge.telegram.TelegramFormat.result(EN, t);
         assertThat(msg.length()).isLessThanOrEqualTo(4096);
-        assertThat(msg).contains("полный вывод во вложении");
+        assertThat(msg).contains("the full output is attached");
+        String ru = dev.vladefined.taskbridge.telegram.TelegramFormat.result(RU, t);
+        assertThat(ru.length()).isLessThanOrEqualTo(4096);
+        assertThat(ru).contains("полный вывод во вложении");
     }
 
     @Test
     void protocolButtonsDecideWithoutTheBrowser() {
-        String xml = ToastXml.build(task("hi"), "http://127.0.0.1:8766/t/tok", true, 300);
+        String xml = ToastXml.build(EN, task("hi"), "http://127.0.0.1:8766/t/tok", true, 300);
         assertThat(xml).contains("arguments=\"claude-bridge:approve/tok\"")
                 .contains("arguments=\"claude-bridge:reject/tok\"")
                 .doesNotContain("/t/tok/approve");
@@ -49,7 +56,7 @@ class DesktopChannelTest {
         Task t = new Task("abc", "pibench", RunMode.NEW, null, "x", "s", "a".repeat(64),
                 TaskStatus.DONE, "desktop", Instant.now(), null, null, "tok", "long answer", "sess",
                 Instant.now(), false, null, "Fixed <b>2</b> tests");
-        assertThat(ToastXml.finished(t)).contains("Готово: abc").contains("Fixed &lt;b&gt;2&lt;/b&gt; tests")
+        assertThat(ToastXml.finished(RU, t)).contains("Готово: abc").contains("Fixed &lt;b&gt;2&lt;/b&gt; tests")
                 .doesNotContain("long answer").doesNotContain("launch=");
     }
 
@@ -62,7 +69,7 @@ class DesktopChannelTest {
 
     @Test
     void longTextCannotBeApprovedFromTheToast() {
-        String xml = ToastXml.build(task("x".repeat(500)), "http://127.0.0.1:8766/t/tok", false, 300);
-        assertThat(xml).doesNotContain("/approve").contains("Открыть полностью").contains("/reject");
+        String xml = ToastXml.build(EN, task("x".repeat(500)), "http://127.0.0.1:8766/t/tok", false, 300);
+        assertThat(xml).doesNotContain("/approve").contains("Open in full").contains("/reject");
     }
 }
