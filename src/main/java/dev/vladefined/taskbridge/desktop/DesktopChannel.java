@@ -113,7 +113,8 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
     }
 
     @Override
-    public void requestMessageApproval(Task t, TaskMessage m, java.util.List<String> recent) {
+    public void requestMessageApproval(Task t, TaskMessage m, java.util.List<String> since,
+                                       java.util.List<String> recent) {
         if (windows) {
             toaster.show(m.id(), ToastXml.message(ui, t, m, pageUrl(m), protocolReady, previewChars));
         }
@@ -198,7 +199,8 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
                 + (t != null ? " · " + h(ui.t("task.folder")) + ": <b>" + h(t.folder()) + "</b>" : "")
                 + " · " + h(ui.t("page.from")) + ": " + h(m.sender())
                 + " · SHA-256 " + h(m.shortHash()) + "</p>"
-                + "<p class=meta>" + h(ui.t("msg.seen", m.stepsBehind())) + "</p>"
+                + "<p class=meta>" + h(m.stepsBehind() == 0 ? ui.t("msg.since.none")
+                        : ui.t("msg.since", m.stepsBehind()).replaceAll(":$", ".")) + "</p>"
                 + "<pre>" + h(m.text()) + "</pre>";
         if (m.status() == MessageStatus.PENDING) {
             String path = "/t/" + m.desktopToken();

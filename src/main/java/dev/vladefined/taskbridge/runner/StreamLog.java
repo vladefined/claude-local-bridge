@@ -159,16 +159,25 @@ public final class StreamLog {
      * cursor is not a position in this stream or is very far behind.
      */
     public static int stepsSince(Path stdout, long cursor, ObjectMapper json) throws IOException {
+        List<String> s = stepsAfter(stdout, cursor, json);
+        return s == null ? Integer.MAX_VALUE : s.size();
+    }
+
+    /**
+     * The steps the agent made after {@code cursor}, or null if the cursor is not a
+     * position in this stream or is very far behind.
+     */
+    public static List<String> stepsAfter(Path stdout, long cursor, ObjectMapper json) throws IOException {
         if (!Files.isRegularFile(stdout)) {
-            return cursor == 0 ? 0 : Integer.MAX_VALUE;
+            return cursor == 0 ? List.of() : null;
         }
         long len = Files.size(stdout);
         if (cursor < 0 || cursor > len || len - cursor > SINCE_MAX_BYTES) {
-            return Integer.MAX_VALUE;
+            return null;
         }
-        int[] n = {0};
-        forEachLine(stdout, cursor, (offset, line) -> n[0] += describe(parse(line, json), false).size());
-        return n[0];
+        List<String> out = new ArrayList<>();
+        forEachLine(stdout, cursor, (offset, line) -> out.addAll(describe(parse(line, json), false)));
+        return out;
     }
 
     private static void add(Deque<String> steps, String s, int max) {

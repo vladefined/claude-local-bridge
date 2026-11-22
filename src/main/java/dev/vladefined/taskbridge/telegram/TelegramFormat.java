@@ -65,23 +65,33 @@ public final class TelegramFormat {
     }
 
     /** Approval request for a message to a running task: the agent's latest steps, then the exact text. */
-    public static String messageRequest(UiText ui, Task t, TaskMessage m, java.util.List<String> recent) {
+    public static String messageRequest(UiText ui, Task t, TaskMessage m, java.util.List<String> since,
+                                        java.util.List<String> recent) {
         StringBuilder sb = new StringBuilder();
         sb.append(ui.t("msg.title", t.id(), t.folder())).append('\n')
                 .append(ui.t("msg.sender")).append(": ").append(m.sender()).append('\n')
-                .append("SHA-256: ").append(m.shortHash()).append('\n')
-                .append(ui.t("msg.seen", m.stepsBehind())).append('\n')
-                .append(ui.t("msg.recent")).append('\n');
-        if (recent == null || recent.isEmpty()) {
-            sb.append(ui.t("msg.none")).append('\n');
+                .append("SHA-256: ").append(m.shortHash()).append('\n');
+        if (since == null || since.isEmpty()) {
+            sb.append(ui.t("msg.since.none")).append('\n')
+                    .append(ui.t("msg.recent")).append('\n');
+            steps(sb, ui, recent);
         } else {
-            for (String s : recent) {
-                sb.append(s.length() > 200 ? s.substring(0, 200) + "…" : s).append('\n');
-            }
+            sb.append(ui.t("msg.since", since.size())).append('\n');
+            steps(sb, ui, since);
         }
         sb.append("────────────\n").append(m.text());
         String s = sb.toString();
         return s.length() > LIMIT - 200 ? s.substring(0, LIMIT - 200) : s;
+    }
+
+    private static void steps(StringBuilder sb, UiText ui, java.util.List<String> steps) {
+        if (steps == null || steps.isEmpty()) {
+            sb.append(ui.t("msg.none")).append('\n');
+            return;
+        }
+        for (String s : steps) {
+            sb.append(s.length() > 200 ? s.substring(0, 200) + "…" : s).append('\n');
+        }
     }
 
     /** The message request after something happened to it. */

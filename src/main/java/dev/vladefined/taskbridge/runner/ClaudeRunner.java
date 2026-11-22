@@ -46,9 +46,10 @@ import dev.vladefined.taskbridge.core.Task;
  * <p>Input is {@code --input-format stream-json} too: the task text is the first user
  * message, and stdin stays open while the agent works, so messages the owner approved
  * during the run ({@link #deliver}) reach the same session. The agent picks them up
- * between tool calls. As soon as a {@code result} event shows the agent has answered,
- * stdin is closed; Claude then handles anything already written and exits. A message
- * that arrives after that is refused, never silently dropped.
+ * between tool calls. stdin is closed as soon as a {@code result} event appears that was
+ * written after the last message sent: the agent has answered everything it was given.
+ * A message sent after an answer was written keeps stdin open until the agent answers
+ * it too. Once closed, further messages are refused, never silently dropped.
  */
 @Component
 public class ClaudeRunner {
@@ -190,8 +191,9 @@ public class ClaudeRunner {
                     p.destroyForcibly();
                     return "Timed out after " + timeout.toMinutes() + " min";
                 }
-                if (!session.isClosed() && watcher.sawResult(json)) {
-                    session.close();          // answered: no more input; claude finishes and exits
+                long answeredAt = watcher.lastResultOffset(json);
+                if (answeredAt >= 0) {
+                    session.closeIfAnsweredAfterLastMessage(answeredAt);
                 }
                 Thread.sleep(250);
             }
@@ -221,18 +223,20 @@ public class ClaudeRunner {
     }
 
     /** The task's stdin, one JSON user message per line. Closed exactly once; then send() refuses. */
-    static final class LiveSession {
+    public static final class LiveSession {
         private final OutputStream stdin;
         final Path stdout;
         private final List<StreamLog.Insert> delivered = new ArrayList<>();
+        private long lastSentAt;
         private boolean closed;
 
-        LiveSession(OutputStream stdin, Path stdout) {
+        public LiveSession(OutputStream stdin, Path stdout) {
             this.stdin = stdin;
             this.stdout = stdout;
         }
 
-        synchronized long send(String text, ObjectMapper json) {
+        /** @return the stream offset at sending time, or -1 if stdin is closed */
+        public synchronized long send(String text, ObjectMapper json) {
             if (closed) {
                 return -1;
             }
@@ -245,6 +249,7 @@ public class ClaudeRunner {
                 inner.put("content", text);
                 stdin.write((json.writeValueAsString(msg) + "\n").getBytes(StandardCharsets.UTF_8));
                 stdin.flush();
+                lastSentAt = offset;
                 if (!delivered.isEmpty() || offset > 0) {
                     delivered.add(new StreamLog.Insert(offset, text));
                 } else {
@@ -257,11 +262,24 @@ public class ClaudeRunner {
             }
         }
 
-        synchronized boolean isClosed() {
+        public synchronized boolean isClosed() {
             return closed;
         }
 
-        synchronized void close() {
+        /**
+         * Close stdin if the answer at {@code resultOffset} was written after the last
+         * message was sent. Checked and closed under the same lock as {@link #send}, so a
+         * message is either before the close (and answered) or refused.
+         */
+        public synchronized boolean closeIfAnsweredAfterLastMessage(long resultOffset) {
+            if (!closed && resultOffset >= lastSentAt) {
+                close();
+                return true;
+            }
+            return false;
+        }
+
+        public synchronized void close() {
             if (!closed) {
                 closed = true;
                 try {
@@ -277,17 +295,27 @@ public class ClaudeRunner {
         }
     }
 
-    /** Reads the growing stdout file from where it stopped and reports a {@code result} event. */
-    static final class ResultWatcher {
+    /** Reads the growing stdout file from where it stopped and reports {@code result} events. */
+    public static final class ResultWatcher {
         private final Path file;
         private long pos;
         private final java.io.ByteArrayOutputStream partial = new java.io.ByteArrayOutputStream();
 
-        ResultWatcher(Path file) {
+        private long lineStart;
+
+        public ResultWatcher(Path file) {
             this.file = file;
         }
 
-        boolean sawResult(ObjectMapper json) {
+        /** @return the start offset of the last result line read so far, or -1 if none (yet) */
+        private long lastResult = -1;
+
+        public long lastResultOffset(ObjectMapper json) {
+            readMore(json);
+            return lastResult;
+        }
+
+        private boolean readMore(ObjectMapper json) {
             boolean seen = false;
             try (RandomAccessFile f = new RandomAccessFile(file.toFile(), "r")) {
                 long len = f.length();
@@ -297,18 +325,24 @@ public class ClaudeRunner {
                 f.seek(pos);
                 byte[] buf = new byte[(int) Math.min(len - pos, 1 << 20)];
                 f.readFully(buf);
+                long at = pos;
                 pos += buf.length;
                 for (byte b : buf) {
+                    at++;
                     if (b == '\n') {
                         String line = partial.toString(StandardCharsets.UTF_8);
                         partial.reset();
                         if (line.contains("\"result\"")) {
                             try {
-                                seen |= StreamLog.isFinal(json.readTree(line));
+                                if (StreamLog.isFinal(json.readTree(line))) {
+                                    lastResult = lineStart;
+                                    seen = true;
+                                }
                             } catch (IOException ignored) {
                                 // not JSON
                             }
                         }
+                        lineStart = at;
                     } else if (partial.size() < (8 << 20)) {
                         partial.write(b);
                     }

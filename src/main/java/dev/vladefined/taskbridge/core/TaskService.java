@@ -164,10 +164,12 @@ public class TaskService {
         }
         Path stream = runner.runningStdout(task);
         int behind;
+        List<String> since;
         List<String> recent;
         try {
-            behind = StreamLog.stepsSince(stream, request.cursor(), json);
-            recent = StreamLog.snapshot(stream, 5, json, inserts(messages.findByTask(taskId))).steps();
+            since = StreamLog.stepsAfter(stream, request.cursor(), json);
+            behind = since == null ? Integer.MAX_VALUE : since.size();
+            recent = StreamLog.snapshot(stream, 3, json, inserts(messages.findByTask(taskId))).steps();
         } catch (IOException e) {
             throw new IllegalStateException("cannot read the task's progress: " + e.getMessage());
         }
@@ -181,7 +183,7 @@ public class TaskService {
         messages.insert(m);
         log.info("message {} for task {} received from '{}' ({} steps behind)", m.id(), taskId, m.sender(), behind);
         for (ApprovalChannel ch : channels) {
-            safely(() -> ch.requestMessageApproval(task, m, recent), ch, "requestMessageApproval");
+            safely(() -> ch.requestMessageApproval(task, m, since, recent), ch, "requestMessageApproval");
         }
         return m;
     }

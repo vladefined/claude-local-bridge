@@ -16,9 +16,11 @@ public interface ApprovalChannel {
     /**
      * A message for the running {@code task} waits for approval.
      *
+     * @param sinceCursor what the agent did after the progress the caller based the message on
      * @param recentSteps the agent's last steps, so the owner sees what it is doing now
      */
-    default void requestMessageApproval(Task task, TaskMessage message, java.util.List<String> recentSteps) {
+    default void requestMessageApproval(Task task, TaskMessage message, java.util.List<String> sinceCursor,
+                                        java.util.List<String> recentSteps) {
     }
 
     /** The message was decided, delivered, or could not be delivered: update or remove the controls. */

@@ -99,6 +99,7 @@ class ClaudeRunnerTest {
         Task t = task(RunMode.NEW, null, "count");
         var pool = java.util.concurrent.Executors.newSingleThreadExecutor();
         var future = pool.submit(() -> runner.run(t, new Folder(dir.toString(), List.of(), null)));
+        // (stdin closing rule itself: see inputStaysOpenUntilTheLastMessageIsAnswered)
         Path stream = runner.runningStdout(t);
         long until = System.currentTimeMillis() + 20_000;
         while (!(runner.isLive("abc") && Files.exists(stream) && Files.readString(stream).contains("step 1"))) {
@@ -116,6 +117,37 @@ class ClaudeRunnerTest {
         // after the run nothing can be delivered any more
         assertThat(runner.isLive("abc")).isFalse();
         assertThat(runner.deliver("abc", "too late")).isEqualTo(-1);
+    }
+
+    @Test
+    void inputStaysOpenUntilTheLastMessageIsAnswered(@TempDir Path dir) throws Exception {
+        ObjectMapper json = new ObjectMapper();
+        Path stream = dir.resolve("s.stdout.json");
+        Files.writeString(stream, "");
+        var stdin = new java.io.ByteArrayOutputStream();
+        var session = new ClaudeRunner.LiveSession(stdin, stream);
+        var watcher = new ClaudeRunner.ResultWatcher(stream);
+        assertThat(session.send("the task", json)).isZero();
+        Files.writeString(stream, "{\"type\":\"assistant\",\"message\":{\"content\":[]}}\n",
+                java.nio.file.StandardOpenOption.APPEND);
+        assertThat(watcher.lastResultOffset(json)).isEqualTo(-1);
+
+        // the agent answers; a message is sent after that answer was written, before the bridge reacted
+        long resultAt = Files.size(stream);
+        Files.writeString(stream, "{\"type\":\"result\",\"result\":\"first\"}\n", java.nio.file.StandardOpenOption.APPEND);
+        assertThat(session.send("one more thing", json)).isGreaterThan(resultAt);
+        assertThat(watcher.lastResultOffset(json)).isEqualTo(resultAt);
+        assertThat(session.closeIfAnsweredAfterLastMessage(resultAt)).isFalse();   // not answered yet
+        assertThat(session.isClosed()).isFalse();
+
+        // the answer to that message closes stdin; later messages are refused
+        long secondAt = Files.size(stream);
+        Files.writeString(stream, "{\"type\":\"result\",\"result\":\"second\"}\n", java.nio.file.StandardOpenOption.APPEND);
+        assertThat(watcher.lastResultOffset(json)).isEqualTo(secondAt);
+        assertThat(session.closeIfAnsweredAfterLastMessage(secondAt)).isTrue();
+        assertThat(session.send("too late", json)).isEqualTo(-1);
+        assertThat(stdin.toString(java.nio.charset.StandardCharsets.UTF_8))
+                .contains("\"content\":\"the task\"", "\"content\":\"one more thing\"").doesNotContain("too late");
     }
 
     @Test

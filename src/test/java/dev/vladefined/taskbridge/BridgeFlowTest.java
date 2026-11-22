@@ -85,8 +85,9 @@ class BridgeFlowTest {
         }
 
         @Override
-        public void requestMessageApproval(Task t, dev.vladefined.taskbridge.core.TaskMessage m, List<String> recent) {
-            events.add("msg-request:" + m.id() + ":" + recent.size());
+        public void requestMessageApproval(Task t, dev.vladefined.taskbridge.core.TaskMessage m,
+                                           List<String> since, List<String> recent) {
+            events.add("msg-request:" + m.id() + ":" + since.size() + ":" + recent.size());
         }
 
         @Override
@@ -303,7 +304,7 @@ class BridgeFlowTest {
                     .andExpect(jsonPath("$.status").value("PENDING"))
                     .andReturn().getResponse().getContentAsString();
             String mid = json.readTree(resp).path("id").asText();
-            assertThat(channel.events).contains("msg-request:" + mid + ":4");
+            assertThat(channel.events).contains("msg-request:" + mid + ":0:3");
             verify(runner, times(0)).deliver(any(), any());     // nothing before approval
 
             assertThat(tasks.decideMessage(mid, true, "telegram")).isTrue();

@@ -84,10 +84,14 @@ session, which picks it up between tool calls.
   steps next to the text.
 - The same text rules as for tasks (length, no invisible characters); the message goes
   through stdin as a JSON string, never on the command line.
-- As soon as the agent answers (a `result` event), the bridge closes stdin and nothing
-  more can be added; a message approved later is reported as not delivered, and the
-  caller should send a new task with mode `continue`. Undecided messages expire after
-  10 minutes.
+- The bridge closes stdin as soon as a final answer (`result` event) appears that was
+  written after the last message it sent, i.e. the agent has answered everything it
+  was given. After that nothing more can be added: messages still waiting are cancelled
+  (`UNDELIVERED`, their Telegram message is edited), and the caller should send a new
+  task with mode `continue`. Undecided messages expire after 10 minutes.
+- The cursor is a byte position in the agent's output, not a step number (progress
+  reads only the tail of the stream). From it the bridge counts the steps made since
+  and lists them in the approval request.
 - Delivered messages appear in progress and in the log as `✉ Message from the caller`.
 
 `bridge.runner.command` must therefore accept stream-json input; Claude Code does.

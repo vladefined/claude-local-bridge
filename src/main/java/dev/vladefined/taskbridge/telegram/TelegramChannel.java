@@ -96,8 +96,9 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
     }
 
     @Override
-    public void requestMessageApproval(Task t, TaskMessage m, java.util.List<String> recent) {
-        long msgId = client.sendMessage(chatId, TelegramFormat.messageRequest(ui, t, m, recent), java.util.List.of(
+    public void requestMessageApproval(Task t, TaskMessage m, java.util.List<String> since,
+                                       java.util.List<String> recent) {
+        long msgId = client.sendMessage(chatId, TelegramFormat.messageRequest(ui, t, m, since, recent), java.util.List.of(
                 new Button(ui.t("msg.button.send"), "ma:" + m.id()),
                 new Button(ui.t("msg.button.reject"), "mr:" + m.id())), t.telegramMessageId());
         messages.setTelegramMessageId(m.id(), msgId);
