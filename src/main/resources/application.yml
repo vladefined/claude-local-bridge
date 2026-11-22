@@ -1,0 +1,33 @@
+server:
+  # The API listens on loopback only. Expose it with a tunnel (e.g. cloudflared),
+  # never by binding to 0.0.0.0.
+  address: 127.0.0.1
+  port: ${BRIDGE_PORT:8765}
+
+spring:
+  datasource:
+    url: jdbc:sqlite:${BRIDGE_DB:task-bridge.db}
+    hikari:
+      maximum-pool-size: 1   # SQLite: one writer, avoids SQLITE_BUSY
+
+bridge:
+  hmac-secret: ${BRIDGE_HMAC_SECRET:}
+  approval-ttl: 30m
+  max-task-chars: 3000
+  telegram:
+    enabled: ${BRIDGE_TELEGRAM_ENABLED:true}
+    bot-token: ${BRIDGE_TELEGRAM_TOKEN:}
+    chat-id: ${BRIDGE_TELEGRAM_CHAT_ID:0}
+  desktop:
+    enabled: ${BRIDGE_DESKTOP_ENABLED:true}
+    port: 8766
+  runner:
+    command: claude
+    default-timeout: 20m
+  # Folders the remote side may target, by name. Paths and tools are fixed here,
+  # never taken from the request.
+  folders:
+    pibench:
+      path: 'E:\pibench'
+      allowed-tools: [Read, Grep, Glob, Edit, Write, "Bash(python:*)", "Bash(git status:*)", "Bash(git diff:*)"]
+      timeout: 30m

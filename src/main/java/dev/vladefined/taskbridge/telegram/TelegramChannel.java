@@ -1,0 +1,146 @@
+package dev.vladefined.taskbridge.telegram;
+
+import java.time.Duration;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.SmartLifecycle;
+import org.springframework.stereotype.Component;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import dev.vladefined.taskbridge.config.BridgeProperties;
+import dev.vladefined.taskbridge.core.ApprovalChannel;
+import dev.vladefined.taskbridge.core.DecisionAttempt;
+import dev.vladefined.taskbridge.core.Task;
+import dev.vladefined.taskbridge.core.TaskRepository;
+import dev.vladefined.taskbridge.telegram.TelegramClient.Button;
+
+/**
+ * Approval in Telegram. Long polling, so no inbound port is needed for Telegram.
+ * Button presses are accepted only from the configured chat; everything else is ignored.
+ */
+@Component
+@ConditionalOnProperty(name = "bridge.telegram.enabled", havingValue = "true")
+public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
+
+    private static final Logger log = LoggerFactory.getLogger(TelegramChannel.class);
+    public static final String CHANNEL = "telegram";
+
+    private final TelegramClient client;
+    private final long chatId;
+    private final TaskRepository repo;
+    private final ApplicationEventPublisher events;
+    private volatile boolean running;
+    private Thread poller;
+
+    public TelegramChannel(BridgeProperties props, ObjectMapper json, TaskRepository repo,
+                           ApplicationEventPublisher events) {
+        if (props.telegram().botToken() == null || props.telegram().botToken().isBlank()
+                || props.telegram().chatId() == 0) {
+            throw new IllegalStateException("Telegram is enabled but BRIDGE_TELEGRAM_TOKEN / "
+                    + "BRIDGE_TELEGRAM_CHAT_ID are not set");
+        }
+        this.client = new TelegramClient(props.telegram().botToken(), json);
+        this.chatId = props.telegram().chatId();
+        this.repo = repo;
+        this.events = events;
+    }
+
+    @Override
+    public void requestApproval(Task t) {
+        long msgId = client.sendMessage(chatId, TelegramFormat.request(t), java.util.List.of(
+                new Button("✅ Выполнить", "a:" + t.id()),
+                new Button("❌ Отклонить", "r:" + t.id())), null);
+        repo.setTelegramMessageId(t.id(), msgId);
+    }
+
+    @Override
+    public void onDecided(Task t) {
+        Long msgId = repo.find(t.id()).map(Task::telegramMessageId).orElse(null);
+        if (msgId != null) {
+            client.editMessageText(chatId, msgId, TelegramFormat.decided(t));
+        }
+    }
+
+    @Override
+    public void onFinished(Task t) {
+        for (String part : TelegramFormat.result(t)) {
+            client.sendMessage(chatId, part, null, t.telegramMessageId());
+        }
+    }
+
+    void handleUpdate(JsonNode update) {
+        JsonNode cb = update.path("callback_query");
+        if (cb.isMissingNode()) {
+            return;
+        }
+        String cbId = cb.path("id").asText();
+        long from = cb.path("from").path("id").asLong();
+        long chat = cb.path("message").path("chat").path("id").asLong();
+        String data = cb.path("data").asText("");
+        if (chat != chatId || from != chatId) {
+            log.warn("ignored button press from user {} in chat {}", from, chat);
+            return;
+        }
+        if (data.length() < 3 || data.charAt(1) != ':') {
+            return;
+        }
+        boolean approve = data.charAt(0) == 'a';
+        events.publishEvent(new DecisionAttempt(data.substring(2), approve, CHANNEL));
+        Task t = repo.find(data.substring(2)).orElse(null);
+        String answer = t == null ? "Задача не найдена"
+                : t.decidedBy() != null && !CHANNEL.equals(t.decidedBy()) ? "Уже решено: " + t.status()
+                : approve ? "Запускаю" : "Отклонено";
+        client.answerCallbackQuery(cbId, answer);
+    }
+
+    private void pollLoop() {
+        long offset = 0;
+        while (running) {
+            try {
+                for (JsonNode u : client.getUpdates(offset, 25)) {
+                    offset = Math.max(offset, u.path("update_id").asLong() + 1);
+                    try {
+                        handleUpdate(u);
+                    } catch (RuntimeException e) {
+                        log.warn("update failed: {}", e.toString());
+                    }
+                }
+            } catch (RuntimeException e) {
+                log.warn("polling error: {}", e.getMessage());
+                sleep(Duration.ofSeconds(5));
+            }
+        }
+    }
+
+    private static void sleep(Duration d) {
+        try {
+            Thread.sleep(d);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    @Override
+    public void start() {
+        running = true;
+        poller = Thread.ofVirtual().name("telegram-poller").start(this::pollLoop);
+    }
+
+    @Override
+    public void stop() {
+        running = false;
+        if (poller != null) {
+            poller.interrupt();
+        }
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
+}
