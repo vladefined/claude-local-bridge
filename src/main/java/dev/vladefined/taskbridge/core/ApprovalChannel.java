@@ -26,4 +26,12 @@ public interface ApprovalChannel {
     /** The message was decided, delivered, or could not be delivered: update or remove the controls. */
     default void onMessageUpdated(Task task, TaskMessage message) {
     }
+
+    /** A request to add, change or remove a folder waits for approval. */
+    default void requestFolderApproval(dev.vladefined.taskbridge.access.FolderRequest request) {
+    }
+
+    /** The folder request was applied, rejected, expired or failed: update or remove the controls. */
+    default void onFolderRequestUpdated(dev.vladefined.taskbridge.access.FolderRequest request) {
+    }
 }

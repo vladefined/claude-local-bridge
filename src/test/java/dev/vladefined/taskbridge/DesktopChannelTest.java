@@ -19,7 +19,7 @@ class DesktopChannelTest {
 
     static Task task(String text) {
         return new Task("abc", "pibench", RunMode.CONTINUE, null, text, "cloud <thread>", "a".repeat(64),
-                TaskStatus.PENDING, null, Instant.now(), null, null, "tok", null, null, null, false, null, null);
+                TaskStatus.PENDING, null, Instant.now(), null, null, "tok", null, null, null, false, null, null, null);
     }
 
     @Test
@@ -34,7 +34,7 @@ class DesktopChannelTest {
     void truncatedResultMessageFitsTelegramAndSaysSo() {
         Task t = new Task("abc", "pibench", RunMode.CONTINUE, null, "x", "s", "a".repeat(64),
                 TaskStatus.DONE, "telegram", Instant.now(), null, 1L, "tok", "y".repeat(3500), "sess",
-                Instant.now(), true, "/out/abc.txt", null);
+                Instant.now(), true, "/out/abc.txt", null, null);
         String msg = dev.vladefined.taskbridge.telegram.TelegramFormat.result(EN, t);
         assertThat(msg.length()).isLessThanOrEqualTo(4096);
         assertThat(msg).contains("the full output is attached");
@@ -55,7 +55,7 @@ class DesktopChannelTest {
     void resultToastShowsTheSummaryEscaped() {
         Task t = new Task("abc", "pibench", RunMode.NEW, null, "x", "s", "a".repeat(64),
                 TaskStatus.DONE, "desktop", Instant.now(), null, null, "tok", "long answer", "sess",
-                Instant.now(), false, null, "Fixed <b>2</b> tests");
+                Instant.now(), false, null, "Fixed <b>2</b> tests", null);
         assertThat(ToastXml.finished(RU, t)).contains("Готово: abc").contains("Fixed &lt;b&gt;2&lt;/b&gt; tests")
                 .doesNotContain("long answer").doesNotContain("launch=");
     }

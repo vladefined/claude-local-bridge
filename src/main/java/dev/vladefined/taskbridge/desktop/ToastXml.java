@@ -3,6 +3,8 @@ package dev.vladefined.taskbridge.desktop;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import dev.vladefined.taskbridge.access.AccessPolicy;
+import dev.vladefined.taskbridge.access.FolderRequest;
 import dev.vladefined.taskbridge.core.Task;
 import dev.vladefined.taskbridge.core.TaskMessage;
 import dev.vladefined.taskbridge.core.UiText;
@@ -36,7 +38,9 @@ public final class ToastXml {
                 + "<visual><binding template=\"ToastGeneric\">"
                 + "<text>" + esc(ui.t("task.title", t.id()) + " → " + t.folder()) + "</text>"
                 + "<text>" + esc(preview) + "</text>"
-                + "<text placement=\"attribution\">" + esc(ui.t("toast.from", t.sender()) + " · " + t.shortHash()) + "</text>"
+                + "<text placement=\"attribution\">" + esc((t.extraToolList().isEmpty() ? ""
+                        : "⚠️ +" + String.join(", ", t.extraToolList()) + " · ")
+                        + ui.t("toast.from", t.sender()) + " · " + t.shortHash()) + "</text>"
                 + "</binding></visual>"
                 + "<actions>" + approve
                 + action(ui.t("toast.reject"), decision(t, pageUrl, protocolButtons, "reject")) + "</actions>"
@@ -60,6 +64,28 @@ public final class ToastXml {
                 + "</binding></visual>"
                 + "<actions>" + send
                 + action(ui.t("toast.reject"), decision(m.desktopToken(), pageUrl, protocolButtons, "reject")) + "</actions>"
+                + "<audio src=\"ms-winsoundevent:Notification.Reminder\"/>"
+                + "</toast>";
+    }
+
+    /** Approval toast for a folder request: path and tool changes; the reason is on the page. */
+    public static String folder(UiText ui, FolderRequest r, String pageUrl, boolean protocolButtons) {
+        StringBuilder text = new StringBuilder(r.path());
+        if (!r.addTools().isEmpty()) {
+            text.append("\n+ ").append(AccessPolicy.describe(r.addTools()));
+        }
+        if (!r.removeTools().isEmpty()) {
+            text.append("\n− ").append(String.join(", ", r.removeTools()));
+        }
+        String body = text.length() > 300 ? text.substring(0, 300) + "…" : text.toString();
+        return "<toast scenario=\"reminder\" activationType=\"protocol\" launch=\"" + esc(pageUrl) + "\">"
+                + "<visual><binding template=\"ToastGeneric\">"
+                + "<text>" + esc(ui.t("toast.folder.title", r.kind().name().toLowerCase(java.util.Locale.ROOT), r.name())) + "</text>"
+                + "<text>" + esc(body) + "</text>"
+                + "<text placement=\"attribution\">" + esc(ui.t("toast.from", r.sender())) + "</text>"
+                + "</binding></visual>"
+                + "<actions>" + action(ui.t("toast.allow"), decision(r.desktopToken(), pageUrl, protocolButtons, "approve"))
+                + action(ui.t("toast.reject"), decision(r.desktopToken(), pageUrl, protocolButtons, "reject")) + "</actions>"
                 + "<audio src=\"ms-winsoundevent:Notification.Reminder\"/>"
                 + "</toast>";
     }

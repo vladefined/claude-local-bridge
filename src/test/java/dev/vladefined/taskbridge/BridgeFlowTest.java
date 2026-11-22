@@ -64,6 +64,8 @@ class BridgeFlowTest {
         r.add("bridge.telegram.enabled", () -> "false");
         r.add("bridge.desktop.enabled", () -> "false");
         r.add("bridge.folders.demo.path", () -> tmp.toString());
+        r.add("bridge.folders-file", () -> tmp.resolve("state").resolve("folders.json").toString());
+        r.add("bridge.access.user-home", () -> tmp.resolve("home").toString());
     }
 
     static class RecordingChannel implements ApprovalChannel {
@@ -82,6 +84,16 @@ class BridgeFlowTest {
         @Override
         public void onFinished(Task t) {
             events.add("finished:" + t.id() + ":" + t.status());
+        }
+
+        @Override
+        public void requestFolderApproval(dev.vladefined.taskbridge.access.FolderRequest r) {
+            events.add("folder-request:" + r.id() + ":" + r.kind() + ":" + r.name());
+        }
+
+        @Override
+        public void onFolderRequestUpdated(dev.vladefined.taskbridge.access.FolderRequest r) {
+            events.add("folder:" + r.id() + ":" + r.status());
         }
 
         @Override
@@ -331,6 +343,108 @@ class BridgeFlowTest {
         } finally {
             release.countDown();
         }
+    }
+
+    @Autowired dev.vladefined.taskbridge.access.FolderAccessService folderAccess;
+
+    MockHttpServletRequestBuilder folderRequest(String body) {
+        return signed(post("/folders/requests"), "POST", "/folders/requests", body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    String submitTo(String folder, String extraToolsJson) throws Exception {
+        byte[] body = ("{\"folder\":\"" + folder + "\",\"text\":\"go\",\"mode\":\"new\",\"sender\":\"test\""
+                + (extraToolsJson == null ? "" : ",\"extraTools\":" + extraToolsJson) + "}").getBytes(StandardCharsets.UTF_8);
+        String resp = mvc.perform(signed(post("/tasks"), "POST", "/tasks", body))
+                .andExpect(status().isAccepted()).andReturn().getResponse().getContentAsString();
+        return json.readTree(resp).path("id").asText();
+    }
+
+    @Test
+    void aFolderIsUsableOnlyAfterTheOwnerApprovesIt() throws Exception {
+        Path proj = java.nio.file.Files.createDirectories(tmp.resolve("projects").resolve("app"));
+        mvc.perform(signed(get("/folders"), "GET", "/folders", new byte[0]))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.folders[?(@.name=='app')]").isEmpty());
+        mvc.perform(get("/folders")).andExpect(status().isUnauthorized());
+
+        // refused before the owner is ever asked
+        mvc.perform(folderRequest("{\"kind\":\"add\",\"name\":\"app\",\"path\":" + json.writeValueAsString(proj.toString())
+                + ",\"addTools\":[\"Bash\"],\"reason\":\"tests\"}")).andExpect(status().isBadRequest());
+        mvc.perform(folderRequest("{\"kind\":\"add\",\"name\":\"home\",\"path\":" + json.writeValueAsString(tmp.toString())
+                + ",\"addTools\":[\"Read\"],\"reason\":\"all of it\"}")).andExpect(status().isBadRequest());
+        mvc.perform(folderRequest("{\"kind\":\"add\",\"name\":\"app\",\"path\":" + json.writeValueAsString(proj.toString())
+                + ",\"addTools\":[\"Read\"]}")).andExpect(status().isBadRequest());          // no reason
+
+        String resp = mvc.perform(folderRequest("{\"kind\":\"add\",\"name\":\"app\",\"path\":"
+                        + json.writeValueAsString(proj.resolve("..").resolve("app").toString())
+                        + ",\"addTools\":[\"Read\",\"Bash(mvn test:*)\"],\"timeoutMinutes\":15,\"reason\":\"run its tests\",\"sender\":\"cloud\"}"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.path").value(proj.toRealPath().toString()))
+                .andReturn().getResponse().getContentAsString();
+        String rid = json.readTree(resp).path("id").asText();
+        assertThat(channel.events).contains("folder-request:" + rid + ":ADD:app");
+        // not usable yet
+        byte[] body = "{\"folder\":\"app\",\"text\":\"go\",\"mode\":\"new\"}".getBytes(StandardCharsets.UTF_8);
+        mvc.perform(signed(post("/tasks"), "POST", "/tasks", body)).andExpect(status().isBadRequest());
+
+        assertThat(folderAccess.decide(rid, true, "telegram")).isTrue();
+        assertThat(folderAccess.decide(rid, false, "desktop")).isFalse();
+        assertThat(channel.events).contains("folder:" + rid + ":APPLIED");
+        mvc.perform(signed(get("/folders/requests/" + rid), "GET", "/folders/requests/" + rid, new byte[0]))
+                .andExpect(jsonPath("$.status").value("APPLIED"));
+        mvc.perform(signed(get("/folders"), "GET", "/folders", new byte[0]))
+                .andExpect(jsonPath("$.folders[?(@.name=='app')].allowedTools[1]").value("Bash(mvn test:*)"))
+                .andExpect(jsonPath("$.folders[?(@.name=='app')].timeoutMinutes").value(15));
+        assertThat(tmp.resolve("state").resolve("folders.json")).content().contains("\"app\"");
+
+        // a task there now runs with exactly those tools
+        org.mockito.ArgumentCaptor<dev.vladefined.taskbridge.config.BridgeProperties.Folder> used =
+                org.mockito.ArgumentCaptor.forClass(dev.vladefined.taskbridge.config.BridgeProperties.Folder.class);
+        when(runner.run(any(), used.capture())).thenReturn(new RunResult(true, "ok", null, null));
+        String id = submitTo("app", null);
+        tasks.decide(id, true, "telegram");
+        verify(runner, timeout(5000).times(1)).run(any(), any());
+        assertThat(used.getValue().allowedTools()).containsExactly("Read", "Bash(mvn test:*)");
+
+        // change: take Bash away; remove: the folder disappears
+        String change = json.readTree(mvc.perform(folderRequest("{\"kind\":\"change\",\"name\":\"app\","
+                        + "\"removeTools\":[\"Bash(mvn test:*)\"],\"addTools\":[\"Grep\"],\"reason\":\"no more tests\"}"))
+                .andExpect(status().isAccepted()).andReturn().getResponse().getContentAsString()).path("id").asText();
+        folderAccess.decide(change, true, "desktop");
+        mvc.perform(signed(get("/folders"), "GET", "/folders", new byte[0]))
+                .andExpect(jsonPath("$.folders[?(@.name=='app')].allowedTools[*]").value(org.hamcrest.Matchers.contains("Read", "Grep")));
+        String remove = json.readTree(mvc.perform(folderRequest("{\"kind\":\"remove\",\"name\":\"app\",\"reason\":\"done\"}"))
+                .andExpect(status().isAccepted()).andReturn().getResponse().getContentAsString()).path("id").asText();
+        folderAccess.decide(remove, false, "telegram");           // rejected: still there
+        mvc.perform(signed(get("/folders"), "GET", "/folders", new byte[0]))
+                .andExpect(jsonPath("$.folders[?(@.name=='app')]").isNotEmpty());
+        String remove2 = json.readTree(mvc.perform(folderRequest("{\"kind\":\"remove\",\"name\":\"app\",\"reason\":\"done\"}"))
+                .andExpect(status().isAccepted()).andReturn().getResponse().getContentAsString()).path("id").asText();
+        folderAccess.decide(remove2, true, "telegram");
+        mvc.perform(signed(post("/tasks"), "POST", "/tasks", body)).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void oneTimeToolsAreApprovedWithTheTaskAndOnlyForIt() throws Exception {
+        org.mockito.ArgumentCaptor<dev.vladefined.taskbridge.config.BridgeProperties.Folder> used =
+                org.mockito.ArgumentCaptor.forClass(dev.vladefined.taskbridge.config.BridgeProperties.Folder.class);
+        when(runner.run(any(), used.capture())).thenReturn(new RunResult(true, "ok", null, null));
+        // a whole shell is refused here too
+        byte[] bad = "{\"folder\":\"demo\",\"text\":\"go\",\"mode\":\"new\",\"extraTools\":[\"Bash(*)\"]}"
+                .getBytes(StandardCharsets.UTF_8);
+        mvc.perform(signed(post("/tasks"), "POST", "/tasks", bad)).andExpect(status().isBadRequest());
+
+        String id = submitTo("demo", "[\"Bash(npm test:*)\"]");
+        mvc.perform(signed(get("/tasks/" + id), "GET", "/tasks/" + id, new byte[0]))
+                .andExpect(jsonPath("$.extraTools[0]").value("Bash(npm test:*)"));
+        tasks.decide(id, true, "telegram");
+        verify(runner, timeout(5000).times(1)).run(any(), any());
+        assertThat(used.getValue().allowedTools()).contains("Bash(npm test:*)");
+        // the folder itself did not change
+        mvc.perform(signed(get("/folders"), "GET", "/folders", new byte[0]))
+                .andExpect(jsonPath("$.folders[?(@.name=='demo')].allowedTools[*]")
+                        .value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem("Bash(npm test:*)"))));
     }
 
     @Test

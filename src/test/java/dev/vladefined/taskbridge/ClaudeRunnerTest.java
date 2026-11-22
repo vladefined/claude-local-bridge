@@ -32,7 +32,7 @@ class ClaudeRunnerTest {
 
     static Task task(RunMode mode, String session, String text) {
         return new Task("abc", "x", mode, session, text, "s", "0".repeat(64), TaskStatus.APPROVED, null,
-                Instant.now(), null, null, null, null, null, null, false, null, null);
+                Instant.now(), null, null, null, null, null, null, false, null, null, null);
     }
 
     @Test

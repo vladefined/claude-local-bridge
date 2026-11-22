@@ -22,7 +22,14 @@ public record Task(
         boolean resultTruncated,
         String outputPath,
         /** The agent's own one-line summary of what it did, if it wrote one. */
-        String summary) {
+        String summary,
+        /** Tools allowed for this task only, approved together with it (comma-separated), or null. */
+        String extraTools) {
+
+    public java.util.List<String> extraToolList() {
+        return extraTools == null || extraTools.isBlank() ? java.util.List.of()
+                : java.util.List.of(extraTools.split(","));
+    }
 
     /** First 12 hex chars of the text hash: enough to compare by eye across channels. */
     public String shortHash() {

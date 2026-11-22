@@ -23,6 +23,9 @@ import dev.vladefined.taskbridge.config.BridgeProperties;
 import dev.vladefined.taskbridge.core.ApprovalChannel;
 import dev.vladefined.taskbridge.core.DecisionAttempt;
 import dev.vladefined.taskbridge.core.Task;
+import dev.vladefined.taskbridge.access.FolderAccessService;
+import dev.vladefined.taskbridge.access.FolderRequest;
+import dev.vladefined.taskbridge.access.FolderRequestRepository;
 import dev.vladefined.taskbridge.core.MessageDecisionAttempt;
 import dev.vladefined.taskbridge.core.MessageStatus;
 import dev.vladefined.taskbridge.core.TaskMessage;
@@ -50,6 +53,7 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
 
     private final TaskRepository repo;
     private final TaskMessageRepository messages;
+    private final FolderRequestRepository folderRequests;
     private final ApplicationEventPublisher events;
     private final WindowsToaster toaster;
     private final UiText ui;
@@ -62,13 +66,15 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
 
     @Autowired
     public DesktopChannel(BridgeProperties props, TaskRepository repo, TaskMessageRepository messages,
-                          ApplicationEventPublisher events, UiText ui) {
-        this(props, repo, messages, events, ui, new WindowsToaster(),
+                          FolderRequestRepository folderRequests, ApplicationEventPublisher events, UiText ui) {
+        this(props, repo, messages, folderRequests, events, ui, new WindowsToaster(),
                 System.getProperty("os.name", "").toLowerCase().startsWith("windows"));
     }
 
     DesktopChannel(BridgeProperties props, TaskRepository repo, TaskMessageRepository messages,
-                   ApplicationEventPublisher events, UiText ui, WindowsToaster toaster, boolean windows) {
+                   FolderRequestRepository folderRequests, ApplicationEventPublisher events, UiText ui,
+                   WindowsToaster toaster, boolean windows) {
+        this.folderRequests = folderRequests;
         this.ui = ui;
         this.messages = messages;
         this.repo = repo;
@@ -127,6 +133,21 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
         }
     }
 
+    @Override
+    public void requestFolderApproval(FolderRequest r) {
+        if (windows) {
+            toaster.show(r.id(), ToastXml.folder(ui, r, "http://127.0.0.1:" + port + "/t/" + r.desktopToken(),
+                    protocolReady));
+        }
+    }
+
+    @Override
+    public void onFolderRequestUpdated(FolderRequest r) {
+        if (windows) {
+            toaster.remove(r.id());
+        }
+    }
+
     // ---- local page ----
 
     void handle(HttpExchange ex) throws IOException {
@@ -143,6 +164,23 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
                 return;
             }
             Optional<Task> found = repo.findByDesktopToken(parts[2]);
+            if (found.isEmpty() && folderRequests != null) {
+                Optional<FolderRequest> fr = folderRequests.findByDesktopToken(parts[2]);
+                if (fr.isPresent()) {
+                    FolderRequest r = fr.get();
+                    if (parts.length == 4 && r.status() == FolderRequest.Status.PENDING) {
+                        boolean approve = switch (parts[3]) {
+                            case "approve" -> true;
+                            case "reject" -> false;
+                            default -> throw new IllegalArgumentException("bad action");
+                        };
+                        events.publishEvent(new FolderAccessService.DecisionAttempt(r.id(), approve, CHANNEL));
+                        r = folderRequests.find(r.id()).orElseThrow();
+                    }
+                    send(ex, 200, render(r));
+                    return;
+                }
+            }
             if (found.isEmpty()) {
                 Optional<TaskMessage> msg = messages == null ? Optional.empty() : messages.findByDesktopToken(parts[2]);
                 if (msg.isPresent()) {
@@ -182,6 +220,9 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
         String body = "<p class=meta>" + h(ui.t("task.folder")) + ": <b>" + h(t.folder()) + "</b> · "
                 + h(ui.t("page.from")) + ": " + h(t.sender())
                 + " · SHA-256 " + h(t.shortHash()) + "</p>"
+                + (t.extraToolList().isEmpty() ? "" : "<p class=meta><b>"
+                        + h(ui.t("task.extra-tools", dev.vladefined.taskbridge.access.AccessPolicy.describe(t.extraToolList())))
+                        + "</b></p>")
                 + "<pre>" + h(t.text()) + "</pre>";
         if (t.status() == TaskStatus.PENDING) {
             body += "<form method=post action='" + h(pathFor(t)) + "/approve'><button class=ok>" + h(ui.t("toast.approve")) + "</button></form>"
@@ -211,6 +252,20 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
                     + (m.decidedBy() != null ? " (" + h(m.decidedBy()) + ")" : "") + "</p>";
         }
         return page(ui.t("toast.msg.title", m.taskId()), body);
+    }
+
+    String render(FolderRequest r) {
+        String body = "<pre>" + h(dev.vladefined.taskbridge.telegram.TelegramFormat.folderRequest(ui, r)) + "</pre>";
+        if (r.status() == FolderRequest.Status.PENDING) {
+            String path = "/t/" + r.desktopToken();
+            body += "<form method=post action='" + h(path) + "/approve'><button class=ok>" + h(ui.t("toast.allow")) + "</button></form>"
+                    + "<form method=post action='" + h(path) + "/reject'><button class=no>" + h(ui.t("toast.reject")) + "</button></form>";
+        } else {
+            body += "<p class=status>" + h(ui.t("page.status")) + ": " + h(r.status().name())
+                    + (r.decidedBy() != null ? " (" + h(r.decidedBy()) + ")" : "")
+                    + (r.error() != null ? " — " + h(r.error()) : "") + "</p>";
+        }
+        return page(ui.t("toast.folder.title", r.kind().name().toLowerCase(java.util.Locale.ROOT), r.name()), body);
     }
 
     private static String pathFor(Task t) {

@@ -38,7 +38,8 @@ public class TaskRepository {
                     finished_at INTEGER,
                     result_truncated INTEGER NOT NULL DEFAULT 0,
                     output_path TEXT,
-                    summary TEXT
+                    summary TEXT,
+                    extra_tools TEXT
                 )""");
         // databases created before the summary column existed
         boolean hasSummary = jdbc.queryForList("PRAGMA table_info(tasks)").stream()
@@ -46,15 +47,20 @@ public class TaskRepository {
         if (!hasSummary) {
             jdbc.execute("ALTER TABLE tasks ADD COLUMN summary TEXT");
         }
+        boolean hasExtraTools = jdbc.queryForList("PRAGMA table_info(tasks)").stream()
+                .anyMatch(c -> "extra_tools".equals(c.get("name")));
+        if (!hasExtraTools) {
+            jdbc.execute("ALTER TABLE tasks ADD COLUMN extra_tools TEXT");
+        }
     }
 
     public void insert(Task t) {
         jdbc.update("""
                 INSERT INTO tasks (id, folder, mode, resume_session_id, text, sender, sha256,
-                                   status, created_at, desktop_token)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   status, created_at, desktop_token, extra_tools)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 t.id(), t.folder(), t.mode().name(), t.resumeSessionId(), t.text(), t.sender(),
-                t.sha256(), t.status().name(), t.createdAt().toEpochMilli(), t.desktopToken());
+                t.sha256(), t.status().name(), t.createdAt().toEpochMilli(), t.desktopToken(), t.extraTools());
     }
 
     public Optional<Task> find(String id) {
@@ -131,7 +137,8 @@ public class TaskRepository {
                 instant(rs, "finished_at"),
                 rs.getInt("result_truncated") != 0,
                 rs.getString("output_path"),
-                rs.getString("summary"));
+                rs.getString("summary"),
+                rs.getString("extra_tools"));
     }
 
     private static Long nullableLong(ResultSet rs, String col) throws SQLException {

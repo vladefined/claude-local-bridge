@@ -53,6 +53,24 @@ def main():
     s.add_argument("--session")
     s.add_argument("--sender", default="cloud Claude")
     s.add_argument("--text-file", help="file with the task; stdin if omitted")
+    s.add_argument("--extra-tools", nargs="+", default=[], metavar="TOOL",
+                   help='tools for this task only, approved with it, e.g. "Bash(npm test:*)"')
+    sub.add_parser("folders", help="list the folders tasks may use and their tools")
+    for kind in ("add", "change", "remove"):
+        f = sub.add_parser("request-" + kind, help=f"ask the owner to {kind} a folder")
+        f.add_argument("--name", required=True)
+        f.add_argument("--reason", required=True, help="why; the owner reads this")
+        f.add_argument("--sender", default="cloud Claude")
+        if kind == "add":
+            f.add_argument("--path", required=True, help="absolute path on the PC")
+            f.add_argument("--tools", nargs="+", required=True, metavar="TOOL")
+            f.add_argument("--timeout-minutes", type=int)
+        if kind == "change":
+            f.add_argument("--add-tools", nargs="+", default=[], metavar="TOOL")
+            f.add_argument("--remove-tools", nargs="+", default=[], metavar="TOOL")
+            f.add_argument("--timeout-minutes", type=int)
+    r_ = sub.add_parser("request-status")
+    r_.add_argument("id")
     m = sub.add_parser("add", help="add a message to a RUNNING task (read progress first)")
     m.add_argument("id")
     m.add_argument("--cursor", type=int, required=True,
@@ -71,8 +89,27 @@ def main():
         payload = {"folder": a.folder, "text": text.strip(), "mode": a.mode, "sender": a.sender}
         if a.session:
             payload["sessionId"] = a.session
+        if a.extra_tools:
+            payload["extraTools"] = a.extra_tools
         r = call("POST", "/tasks", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
         print(json.dumps(r, ensure_ascii=False))
+    elif a.cmd == "folders":
+        for f in call("GET", "/folders")["folders"]:
+            limit = f" ({f['timeoutMinutes']} min)" if f.get("timeoutMinutes") else ""
+            print(f"{f['name']}: {f['path']}{limit}\n  tools: {', '.join(f['allowedTools']) or '-'}")
+    elif a.cmd.startswith("request-") and a.cmd != "request-status":
+        kind = a.cmd.split("-", 1)[1]
+        payload = {"kind": kind, "name": a.name, "reason": a.reason, "sender": a.sender}
+        if kind == "add":
+            payload.update(path=a.path, addTools=a.tools)
+        if kind == "change":
+            payload.update(addTools=a.add_tools, removeTools=a.remove_tools)
+        if kind != "remove" and a.timeout_minutes:
+            payload["timeoutMinutes"] = a.timeout_minutes
+        r = call("POST", "/folders/requests", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        print(json.dumps(r, ensure_ascii=False))
+    elif a.cmd == "request-status":
+        print(json.dumps(call("GET", f"/folders/requests/{a.id}"), ensure_ascii=False, indent=2))
     elif a.cmd == "add":
         text = open(a.text_file, encoding="utf-8").read() if a.text_file else sys.stdin.read()
         payload = {"text": text.strip(), "cursor": a.cursor, "sender": a.sender}
