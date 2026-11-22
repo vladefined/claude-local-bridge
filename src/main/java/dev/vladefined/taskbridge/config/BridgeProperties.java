@@ -31,6 +31,12 @@ public record BridgeProperties(
         if (folders == null || folders.isEmpty()) {
             throw new IllegalStateException("At least one entry under bridge.folders is required");
         }
+        for (String name : folders.keySet()) {
+            // folder names become directory names under runner.output-dir
+            if (!name.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")) {
+                throw new IllegalStateException("bridge.folders key must be [A-Za-z0-9._-]: " + name);
+            }
+        }
         folders = Map.copyOf(folders);
     }
 
@@ -49,7 +55,9 @@ public record BridgeProperties(
     public record Runner(
             @DefaultValue("claude") List<String> command,
             @DefaultValue("20m") Duration defaultTimeout,
-            @DefaultValue("outputs") String outputDir) {
+            @DefaultValue("outputs") String outputDir,
+            /** Full output files older than this are deleted; 0 keeps them forever. */
+            @DefaultValue("30d") Duration outputRetention) {
     }
 
     public record Folder(
