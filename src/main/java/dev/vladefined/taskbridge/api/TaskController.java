@@ -28,6 +28,7 @@ import dev.vladefined.taskbridge.core.HmacVerifier.AuthException;
 import dev.vladefined.taskbridge.core.NewTask;
 import dev.vladefined.taskbridge.core.Task;
 import dev.vladefined.taskbridge.core.TaskService;
+import dev.vladefined.taskbridge.runner.ClaudeRunner;
 
 /**
  * The only surface reachable from outside (through the tunnel).
@@ -89,6 +90,40 @@ public class TaskController {
         return tasks.find(id)
                 .filter(t -> t.outputPath() != null && Files.isRegularFile(Path.of(t.outputPath())))
                 .map(t -> ResponseEntity.ok((Resource) new FileSystemResource(t.outputPath())))
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    /** The agent's last steps (tool calls and messages): live while RUNNING, final afterwards. */
+    @GetMapping("/tasks/{id}/progress")
+    public ResponseEntity<Map<String, Object>> progress(
+            @PathVariable String id,
+            @RequestHeader(value = TS, required = false) String ts,
+            @RequestHeader(value = NONCE, required = false) String nonce,
+            @RequestHeader(value = SIG, required = false) String sig) {
+        hmac.verify("GET", "/tasks/" + id + "/progress", ts, nonce, sig, new byte[0]);
+        return tasks.progress(id).map(p -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", p.task().id());
+            m.put("status", p.task().status());
+            m.put("decidedBy", p.task().decidedBy());
+            m.put("lastActivity", p.lastActivity() == null ? null : p.lastActivity().toString());
+            m.put("steps", p.steps());
+            return ResponseEntity.ok(m);
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    /** Readable transcript of the whole run (every message and tool call), after it finished. */
+    @GetMapping(value = "/tasks/{id}/log", produces = "text/plain;charset=UTF-8")
+    public ResponseEntity<Resource> runLog(
+            @PathVariable String id,
+            @RequestHeader(value = TS, required = false) String ts,
+            @RequestHeader(value = NONCE, required = false) String nonce,
+            @RequestHeader(value = SIG, required = false) String sig) {
+        hmac.verify("GET", "/tasks/" + id + "/log", ts, nonce, sig, new byte[0]);
+        return tasks.find(id)
+                .map(t -> ClaudeRunner.sibling(t, ClaudeRunner.LOG_SUFFIX))
+                .filter(Files::isRegularFile)
+                .map(p -> ResponseEntity.ok((Resource) new FileSystemResource(p)))
                 .orElse(ResponseEntity.notFound().build());
     }
 

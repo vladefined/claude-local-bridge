@@ -43,7 +43,9 @@ public record BridgeProperties(
     public record Telegram(
             @DefaultValue("false") boolean enabled,
             String botToken,
-            long chatId) {
+            long chatId,
+            /** Attach the readable run log (every message and tool call) to the result. */
+            @DefaultValue("true") boolean sendLog) {
     }
 
     public record Desktop(

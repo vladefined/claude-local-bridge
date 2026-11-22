@@ -43,7 +43,7 @@ class ClaudeRunnerTest {
         String evil = "\" & del C:\\* & \"";
         List<String> cmd = r.buildCommand(task(RunMode.CONTINUE, null, evil), FOLDER);
         assertThat(cmd).doesNotContain(evil)
-                .containsExactly("claude", "-p", "--output-format", "json", "--continue",
+                .containsExactly("claude", "-p", "--output-format", "stream-json", "--verbose", "--continue",
                         "--append-system-prompt", BridgeProperties.Runner.DEFAULT_SUMMARY_PROMPT,
                         "--allowedTools", "Read,Bash(git status:*)");
     }

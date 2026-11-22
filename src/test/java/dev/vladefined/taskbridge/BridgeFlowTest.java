@@ -205,6 +205,43 @@ class BridgeFlowTest {
     }
 
     @Test
+    void progressAndLogAreAvailableToTheCaller() throws Exception {
+        when(runner.run(any(), any())).thenAnswer(inv -> {
+            Task t = inv.getArgument(0);
+            Path dir = java.nio.file.Files.createDirectories(tmp.resolve("out-" + t.id()));
+            Path full = dir.resolve(t.id() + ".txt");
+            java.nio.file.Files.writeString(full, "done");
+            java.nio.file.Files.writeString(dir.resolve(t.id() + ClaudeRunner.STDOUT_SUFFIX), StreamLogTest.STREAM,
+                    StandardCharsets.UTF_8);
+            java.nio.file.Files.writeString(dir.resolve(t.id() + ClaudeRunner.LOG_SUFFIX), "the log",
+                    StandardCharsets.UTF_8);
+            return new RunResult(true, "done", "s-1", full);
+        });
+        String id = submit("read run.py");
+        // before approval: the status says so, no steps yet
+        mvc.perform(signed(get("/tasks/" + id + "/progress"), "GET", "/tasks/" + id + "/progress", new byte[0]))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.steps").isEmpty());
+        tasks.decide(id, true, "telegram");
+        verify(runner, timeout(5000).times(1)).run(any(), any());
+        Thread.sleep(200);
+        mvc.perform(signed(get("/tasks/" + id + "/progress"), "GET", "/tasks/" + id + "/progress", new byte[0]))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DONE"))
+                .andExpect(jsonPath("$.decidedBy").value("telegram"))
+                .andExpect(jsonPath("$.steps[1]").value("→ Read(E:\\pibench\\run.py)"));
+        mvc.perform(signed(get("/tasks/" + id + "/log"), "GET", "/tasks/" + id + "/log", new byte[0]))
+                .andExpect(status().isOk())
+                .andExpect(result -> assertThat(result.getResponse().getContentAsString()).isEqualTo("the log"));
+        // the signature covers the path: a /progress signature does not open /log
+        String ts = String.valueOf(Instant.now().getEpochSecond());
+        String sig = HexFormat.of().formatHex(hmac.sign(ts, "n-1", "GET", "/tasks/" + id + "/progress", new byte[0]));
+        mvc.perform(get("/tasks/" + id + "/log").header("X-Bridge-Timestamp", ts).header("X-Bridge-Nonce", "n-1")
+                .header("X-Bridge-Signature", sig)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void rejectedTaskNeverRuns() throws Exception {
         String id = submit("do not run me");
         assertThat(tasks.decide(id, false, "telegram")).isTrue();
