@@ -133,9 +133,10 @@ Checked before the owner is asked, and again before applying:
   names), which is what the owner sees; drive roots, `Windows`, `Program Files`,
   `ProgramData`, the user profile itself and anything containing it, `AppData`, `.ssh`,
   `.claude`, `.aws` and similar, and the bridge's own folders are refused;
-- with `bridge.access.roots` set (env `BRIDGE_ACCESS_ROOTS`, comma-separated, e.g.
-  `E:\,D:\code`) a requested folder must be one of the roots or inside one; empty means
-  anywhere the deny rules allow. `GET /folders` returns the roots too;
+- a new folder must be one of `bridge.access.roots` (env `BRIDGE_ACCESS_ROOTS`,
+  comma-separated, e.g. `E:\,D:\code`) or inside one; with no roots configured, requests
+  for new folders are refused (changing or removing existing ones still works).
+  `GET /folders` returns the roots too;
 - tools that change files or run commands are marked ⚠️; rules that start an
   interpreter or build tool (`Bash(python:*)`, `Bash(node:*)`, `Bash(npm:*)`,
   `Bash(mvn:*)`, `Bash(powershell:*)`, ...) are marked ‼️ with a separate line saying

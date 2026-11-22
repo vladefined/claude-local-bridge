@@ -64,7 +64,8 @@ class AccessPolicyTest {
         Path outside = Files.createDirectories(tmp.resolve("other"));
         AccessPolicy.checkInsideRoots(inside.toRealPath(), List.of(root));
         AccessPolicy.checkInsideRoots(root.toRealPath(), List.of(root));
-        AccessPolicy.checkInsideRoots(outside.toRealPath(), List.of());          // no roots: no limit
+        assertThatThrownBy(() -> AccessPolicy.checkInsideRoots(outside.toRealPath(), List.of()))
+                .hasMessageContaining("no roots");                                // no roots: no new folders
         assertThatThrownBy(() -> AccessPolicy.checkInsideRoots(outside.toRealPath(), List.of(root)))
                 .hasMessageContaining("outside the allowed roots");
         // a sibling with the same prefix is not inside

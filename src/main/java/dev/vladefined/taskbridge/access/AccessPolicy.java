@@ -133,12 +133,13 @@ public final class AccessPolicy {
     }
 
     /**
-     * With roots configured, a requested folder must be one of them or inside one.
-     * Empty roots: no such limit (the deny rules still apply).
+     * A requested folder must be one of the roots or inside one. No roots configured:
+     * no new folders at all (changing or removing existing ones still works).
      */
     public static void checkInsideRoots(Path real, List<Path> roots) {
         if (roots == null || roots.isEmpty()) {
-            return;
+            throw new IllegalArgumentException("new folders cannot be requested: no roots are configured "
+                    + "(bridge.access.roots / BRIDGE_ACCESS_ROOTS)");
         }
         for (Path r : roots) {
             if (under(real, r)) {

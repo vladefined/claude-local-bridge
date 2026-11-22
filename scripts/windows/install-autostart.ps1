@@ -46,8 +46,8 @@ BRIDGE_LANGUAGE=ru
 BRIDGE_JAR=$jarCopy
 BRIDGE_DATA_DIR=$DataDir
 
-# Folder requests from the cloud only inside these directories (comma-separated).
-# Empty: anywhere the built-in deny rules allow.
+# New folders may be requested from the cloud only inside these directories
+# (comma-separated, e.g. E:\,D:\code). Empty: such requests are refused.
 BRIDGE_ACCESS_ROOTS=
 
 # Optional extra arguments for the bridge, e.g. other folders:

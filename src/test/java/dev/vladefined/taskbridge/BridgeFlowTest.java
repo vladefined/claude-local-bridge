@@ -66,6 +66,7 @@ class BridgeFlowTest {
         r.add("bridge.folders.demo.path", () -> tmp.toString());
         r.add("bridge.folders-file", () -> tmp.resolve("state").resolve("folders.json").toString());
         r.add("bridge.access.user-home", () -> tmp.resolve("home").toString());
+        r.add("bridge.access.roots", () -> tmp.resolve("projects").toString());
     }
 
     static class RecordingChannel implements ApprovalChannel {

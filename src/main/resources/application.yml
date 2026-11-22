@@ -24,8 +24,8 @@ bridge:
     bot-token: ${BRIDGE_TELEGRAM_TOKEN:}
     chat-id: ${BRIDGE_TELEGRAM_CHAT_ID:0}
   access:
-    # Folder requests may only point inside these directories (comma-separated, e.g.
-    # E:\,D:\code). Empty: anywhere the built-in deny rules allow.
+    # New folders may only be requested inside these directories (comma-separated, e.g.
+    # E:\,D:\code). Empty: requests for new folders are refused.
     roots: ${BRIDGE_ACCESS_ROOTS:}
   desktop:
     enabled: ${BRIDGE_DESKTOP_ENABLED:true}

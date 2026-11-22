@@ -115,7 +115,8 @@ python3 scripts/send_task.py request-status <request id>
 Rules the bridge enforces before the owner is asked (HTTP 400 with the reason):
 - a whole shell is never granted: `Bash`, `Bash(*)` are refused; give a command prefix
   such as `Bash(mvn test:*)`. No commas, quotes or `& | < > ^ % !` in a tool rule;
-- if the owner configured roots (`folders` prints them), the path must be inside one;
+- a new folder must be inside one of the roots the owner configured (`folders` prints
+  them); with no roots, new folders cannot be requested at all;
 - the path must exist, is resolved to its real location (that is what the owner sees),
   and cannot be a drive root, a system folder, the user profile itself, anything in
   `AppData`, `.ssh`, `.claude`, or the bridge's own folders;

@@ -68,7 +68,7 @@ public class FolderAccessService {
         this.roots = roots == null ? List.of() : roots.stream().filter(s -> s != null && !s.isBlank())
                 .map(s -> Path.of(s.strip()).toAbsolutePath().normalize()).toList();
         if (this.roots.isEmpty()) {
-            log.warn("bridge.access.roots is empty: folder requests may point anywhere the deny rules allow");
+            log.warn("bridge.access.roots is empty: requests for new folders will be refused");
         } else {
             log.info("folder requests limited to {}", this.roots);
         }
@@ -104,7 +104,7 @@ public class FolderAccessService {
         return home;
     }
 
-    /** Where new folders may be requested (empty: anywhere the deny rules allow). */
+    /** Where new folders may be requested (empty: nowhere). */
     public List<Path> roots() {
         return roots;
     }

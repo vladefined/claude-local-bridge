@@ -97,7 +97,7 @@ def main():
         r = call("GET", "/folders")
         roots = r.get("roots") or []
         print("new folders may be requested only inside: " + ", ".join(roots) if roots
-              else "new folders: no roots configured (the deny rules still apply)")
+              else "new folders cannot be requested: the owner configured no roots")
         for f in r["folders"]:
             limit = f" ({f['timeoutMinutes']} min)" if f.get("timeoutMinutes") else ""
             print(f"{f['name']}: {f['path']}{limit}\n  tools: {', '.join(f['allowedTools']) or '-'}")
