@@ -115,12 +115,16 @@ python3 scripts/send_task.py request-status <request id>
 Rules the bridge enforces before the owner is asked (HTTP 400 with the reason):
 - a whole shell is never granted: `Bash`, `Bash(*)` are refused; give a command prefix
   such as `Bash(mvn test:*)`. No commas, quotes or `& | < > ^ % !` in a tool rule;
+- if the owner configured roots (`folders` prints them), the path must be inside one;
 - the path must exist, is resolved to its real location (that is what the owner sees),
   and cannot be a drive root, a system folder, the user profile itself, anything in
   `AppData`, `.ssh`, `.claude`, or the bridge's own folders;
 - a reason is required; at most 5 requests can wait at a time.
 
 Ask for the least that does the job: `Read Grep Glob` for reading, `Edit Write` only if
-files must change, and narrow command prefixes. Statuses: `PENDING`, `APPLIED`
+files must change, and narrow command prefixes. Rules that start an interpreter or a
+build tool (`Bash(python:*)`, `Bash(node:*)`, `Bash(npm run:*)`, `Bash(mvn test:*)`,
+`Bash(powershell:*)`...) let the agent run any code; the owner sees them marked ‼️, so
+ask for them only when the task really needs them, and say why. Statuses: `PENDING`, `APPLIED`
 (approved and in effect at once), `REJECTED`, `EXPIRED` (30 min), `FAILED` (approved but
 no longer valid, see `error`). Don't resend a rejected request; ask the owner instead.

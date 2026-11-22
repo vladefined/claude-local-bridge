@@ -40,8 +40,37 @@ class AccessPolicyTest {
 
     @Test
     void riskyToolsAreMarked() {
-        assertThat(AccessPolicy.describe(List.of("Read", "Edit", "Bash(mvn test:*)")))
-                .isEqualTo("Read, ⚠️ Edit, ⚠️ Bash(mvn test:*)");
+        assertThat(AccessPolicy.describe(List.of("Read", "Edit", "Bash(git diff:*)", "Bash(mvn test:*)")))
+                .isEqualTo("Read, ⚠️ Edit, ⚠️ Bash(git diff:*), ‼️ Bash(mvn test:*)");
+    }
+
+    @Test
+    void interpretersAreRecognised() {
+        for (String t : List.of("Bash(python:*)", "Bash(python3 -m pytest:*)", "Bash(python3.12:*)", "Bash(node:*)",
+                "Bash(npx tsc:*)", "Bash(powershell -File:*)", "Bash(pwsh:*)", "Bash(cmd /c:*)", "Bash(C:/Python/python.exe:*)",
+                "Bash(uv run:*)", "Bash(env:*)", "PowerShell(python:*)")) {
+            assertThat(AccessPolicy.interpreter(t)).as(t).isTrue();
+        }
+        for (String t : List.of("Read", "Edit", "Bash(git status:*)", "Bash(git diff:*)", "Bash(ls:*)", "Read(python/**)")) {
+            assertThat(AccessPolicy.interpreter(t)).as(t).isFalse();
+        }
+        assertThat(AccessPolicy.interpreters(List.of("Read", "Bash(python:*)"))).containsExactly("Bash(python:*)");
+    }
+
+    @Test
+    void rootsLimitWhereFoldersMayBe(@TempDir Path tmp) throws Exception {
+        Path root = Files.createDirectories(tmp.resolve("code"));
+        Path inside = Files.createDirectories(root.resolve("app"));
+        Path outside = Files.createDirectories(tmp.resolve("other"));
+        AccessPolicy.checkInsideRoots(inside.toRealPath(), List.of(root));
+        AccessPolicy.checkInsideRoots(root.toRealPath(), List.of(root));
+        AccessPolicy.checkInsideRoots(outside.toRealPath(), List.of());          // no roots: no limit
+        assertThatThrownBy(() -> AccessPolicy.checkInsideRoots(outside.toRealPath(), List.of(root)))
+                .hasMessageContaining("outside the allowed roots");
+        // a sibling with the same prefix is not inside
+        Path sibling = Files.createDirectories(tmp.resolve("code-old"));
+        assertThatThrownBy(() -> AccessPolicy.checkInsideRoots(sibling.toRealPath(), List.of(root)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

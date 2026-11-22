@@ -53,6 +53,7 @@ public class FolderAccessService {
     private final ObjectMapper json;
     private final SecureRandom random = new SecureRandom();
     private final Path home;
+    private final List<Path> roots;
 
     /**
      * @param userHome the profile folder the path rules protect; empty = the real one
@@ -61,7 +62,16 @@ public class FolderAccessService {
     public FolderAccessService(FolderRequestRepository repo, FolderRegistry registry,
                                List<ApprovalChannel> channels, Clock clock, ObjectMapper json,
                                @org.springframework.beans.factory.annotation.Value("${bridge.access.user-home:}")
-                               String userHome) {
+                               String userHome,
+                               @org.springframework.beans.factory.annotation.Value("${bridge.access.roots:}")
+                               List<String> roots) {
+        this.roots = roots == null ? List.of() : roots.stream().filter(s -> s != null && !s.isBlank())
+                .map(s -> Path.of(s.strip()).toAbsolutePath().normalize()).toList();
+        if (this.roots.isEmpty()) {
+            log.warn("bridge.access.roots is empty: folder requests may point anywhere the deny rules allow");
+        } else {
+            log.info("folder requests limited to {}", this.roots);
+        }
         this.home = Path.of(userHome == null || userHome.isBlank() ? System.getProperty("user.home") : userHome);
         this.repo = repo;
         this.registry = registry;
@@ -94,6 +104,17 @@ public class FolderAccessService {
         return home;
     }
 
+    /** Where new folders may be requested (empty: anywhere the deny rules allow). */
+    public List<Path> roots() {
+        return roots;
+    }
+
+    private Path checkedPath(String raw) {
+        Path real = AccessPolicy.checkPath(raw, home(), protectedDirs());
+        AccessPolicy.checkInsideRoots(real, roots);
+        return real;
+    }
+
     public FolderRequest submit(NewFolderRequest r) {
         FolderRequest.Kind kind = kind(r.kind());
         String name = AccessPolicy.checkFolderName(r.name());
@@ -113,7 +134,7 @@ public class FolderAccessService {
                 if (current.isPresent()) {
                     throw new IllegalArgumentException("folder " + name + " exists; use kind change");
                 }
-                path = AccessPolicy.checkPath(r.path(), home(), protectedDirs()).toString();
+                path = checkedPath(r.path()).toString();
                 add = AccessPolicy.checkTools(r.addTools());
                 if (add.isEmpty()) {
                     throw new IllegalArgumentException("addTools: give at least one tool for the new folder");
@@ -206,7 +227,7 @@ public class FolderAccessService {
                 if (current.isPresent()) {
                     throw new IllegalStateException("folder " + r.name() + " exists by now");
                 }
-                Path real = AccessPolicy.checkPath(r.path(), home(), protectedDirs());
+                Path real = checkedPath(r.path());
                 if (!real.toString().equals(r.path())) {
                     throw new IllegalStateException("the path now resolves elsewhere: " + real);
                 }

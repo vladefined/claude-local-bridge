@@ -46,6 +46,10 @@ BRIDGE_LANGUAGE=ru
 BRIDGE_JAR=$jarCopy
 BRIDGE_DATA_DIR=$DataDir
 
+# Folder requests from the cloud only inside these directories (comma-separated).
+# Empty: anywhere the built-in deny rules allow.
+BRIDGE_ACCESS_ROOTS=
+
 # Optional extra arguments for the bridge, e.g. other folders:
 # BRIDGE_ARGS=--bridge.folders.pibench.path=E:\pibench
 "@ | Set-Content -LiteralPath $envFile -Encoding UTF8

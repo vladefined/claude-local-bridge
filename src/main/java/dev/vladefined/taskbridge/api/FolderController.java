@@ -54,7 +54,8 @@ public class FolderController {
             @RequestHeader(value = TaskController.NONCE, required = false) String nonce,
             @RequestHeader(value = TaskController.SIG, required = false) String sig) {
         hmac.verify("GET", "/folders", ts, nonce, sig, new byte[0]);
-        return Map.of("folders", registry.list().stream().map(FolderRegistry::view).toList());
+        return Map.of("folders", registry.list().stream().map(FolderRegistry::view).toList(),
+                "roots", access.roots().stream().map(Object::toString).toList());
     }
 
     /**

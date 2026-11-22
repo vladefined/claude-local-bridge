@@ -25,6 +25,7 @@ public final class TelegramFormat {
                 + "SHA-256: " + t.shortHash() + "\n"
                 + (t.extraToolList().isEmpty() ? ""
                         : ui.t("task.extra-tools", AccessPolicy.describe(t.extraToolList())) + "\n")
+                + interpreterLines(ui, t.extraToolList())
                 + "────────────\n"
                 + t.text();
     }
@@ -126,6 +127,7 @@ public final class TelegramFormat {
         if (!r.addTools().isEmpty()) {
             sb.append(ui.t("folder.add-tools")).append(": ").append(AccessPolicy.describe(r.addTools())).append('\n');
         }
+        sb.append(interpreterLines(ui, r.addTools()));
         if (!r.removeTools().isEmpty()) {
             sb.append(ui.t("folder.remove-tools")).append(": ").append(String.join(", ", r.removeTools())).append('\n');
         }
@@ -139,6 +141,15 @@ public final class TelegramFormat {
         sb.append("────────────\n").append(ui.t("folder.reason")).append(": ").append(r.reason());
         String s = sb.toString();
         return s.length() > LIMIT - 200 ? s.substring(0, LIMIT - 200) : s;
+    }
+
+    /** One loud line per rule that lets the agent run arbitrary code. */
+    static String interpreterLines(UiText ui, java.util.List<String> tools) {
+        StringBuilder sb = new StringBuilder();
+        for (String t : AccessPolicy.interpreters(tools)) {
+            sb.append(ui.t("tool.interpreter", t)).append('\n');
+        }
+        return sb.toString();
     }
 
     public static String folderDecided(UiText ui, FolderRequest r) {

@@ -38,6 +38,16 @@ public final class AccessPolicy {
     /** Tools that change files or run commands: marked ⚠️ in approval requests. */
     private static final Set<String> RISKY = Set.of("bash", "powershell", "shell", "edit", "write",
             "multiedit", "notebookedit");
+    /**
+     * Command prefixes that start an interpreter or a launcher: {@code Bash(python:*)} lets
+     * the agent run {@code python -c "..."}, i.e. any code. Allowed, but marked loudly.
+     */
+    private static final Set<String> INTERPRETERS = Set.of("python", "python3", "py", "pythonw", "node", "nodejs",
+            "deno", "bun", "npx", "npm", "pnpm", "yarn", "uv", "uvx", "pipx", "ruby", "perl", "php", "lua", "java",
+            "jshell", "groovy", "kotlin", "scala", "dotnet", "go", "cargo", "rustc", "gcc", "make", "cmake", "mvn",
+            "gradle", "gradlew", "powershell", "pwsh", "cmd", "bash", "sh", "zsh", "wsl", "env", "sudo", "xargs",
+            "docker", "podman", "kubectl", "ssh", "osascript", "wscript", "cscript", "mshta", "rundll32",
+            "regsvr32", "start", "invoke-expression", "iex");
     /** Path segments never granted, wherever they are. */
     private static final Set<String> SECRET_SEGMENTS = Set.of(".ssh", ".claude", ".gnupg", ".aws",
             ".azure", ".kube", ".docker");
@@ -91,12 +101,51 @@ public final class AccessPolicy {
         return RISKY.contains((p < 0 ? tool : tool.substring(0, p)).toLowerCase(Locale.ROOT));
     }
 
-    /** "⚠️ Edit, Read, ⚠️ Bash(mvn test:*)" */
+    /**
+     * Does this rule let the agent start an interpreter or a build tool, i.e. run
+     * arbitrary code? {@code Bash(python:*)}, {@code Bash(npm run:*)}, {@code Bash(mvn test:*)}
+     * (a build runs the project's code and plugins).
+     */
+    public static boolean interpreter(String tool) {
+        int p = tool.indexOf('(');
+        if (p < 0 || !SHELLS.contains(tool.substring(0, p).toLowerCase(Locale.ROOT))) {
+            return false;
+        }
+        String spec = tool.substring(p + 1, tool.length() - 1).strip();
+        // "python:*" -> python; "python3 -m pytest:*" -> python3; "C:/Py/python.exe:*" -> C:/Py/python.exe
+        String first = spec.split("\\s", 2)[0].replaceAll(":\\*?$", "").toLowerCase(Locale.ROOT);
+        String exe = first.replaceAll("^.*[/\\\\]", "").replaceAll("\\.(exe|cmd|bat|ps1)$", "");
+        return INTERPRETERS.contains(exe) || exe.matches("python\\d+(\\.\\d+)?");
+    }
+
+    /** Rules among {@code tools} that run interpreters (for a separate warning line). */
+    public static List<String> interpreters(List<String> tools) {
+        return tools == null ? List.of() : tools.stream().filter(AccessPolicy::interpreter).toList();
+    }
+
+    /** "Read, ⚠️ Edit, ‼️ Bash(python:*)": ⚠️ changes files or runs commands, ‼️ runs any code. */
     public static String describe(List<String> tools) {
         if (tools == null || tools.isEmpty()) {
             return "—";
         }
-        return String.join(", ", tools.stream().map(t -> risky(t) ? "⚠️ " + t : t).toList());
+        return String.join(", ", tools.stream()
+                .map(t -> interpreter(t) ? "‼️ " + t : risky(t) ? "⚠️ " + t : t).toList());
+    }
+
+    /**
+     * With roots configured, a requested folder must be one of them or inside one.
+     * Empty roots: no such limit (the deny rules still apply).
+     */
+    public static void checkInsideRoots(Path real, List<Path> roots) {
+        if (roots == null || roots.isEmpty()) {
+            return;
+        }
+        for (Path r : roots) {
+            if (under(real, r)) {
+                return;
+            }
+        }
+        throw new IllegalArgumentException("path is outside the allowed roots " + roots + ": " + real);
     }
 
     public static int checkTimeout(Integer minutes) {

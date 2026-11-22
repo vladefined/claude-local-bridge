@@ -94,7 +94,11 @@ def main():
         r = call("POST", "/tasks", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
         print(json.dumps(r, ensure_ascii=False))
     elif a.cmd == "folders":
-        for f in call("GET", "/folders")["folders"]:
+        r = call("GET", "/folders")
+        roots = r.get("roots") or []
+        print("new folders may be requested only inside: " + ", ".join(roots) if roots
+              else "new folders: no roots configured (the deny rules still apply)")
+        for f in r["folders"]:
             limit = f" ({f['timeoutMinutes']} min)" if f.get("timeoutMinutes") else ""
             print(f"{f['name']}: {f['path']}{limit}\n  tools: {', '.join(f['allowedTools']) or '-'}")
     elif a.cmd.startswith("request-") and a.cmd != "request-status":
