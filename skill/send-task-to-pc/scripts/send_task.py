@@ -51,6 +51,12 @@ def main():
     s.add_argument("--session")
     s.add_argument("--sender", default="cloud Claude")
     s.add_argument("--text-file", help="file with the task; stdin if omitted")
+    m = sub.add_parser("add", help="add a message to a RUNNING task (read progress first)")
+    m.add_argument("id")
+    m.add_argument("--cursor", type=int, required=True,
+                   help="the cursor printed by `progress`; refused if the agent has moved on since")
+    m.add_argument("--sender", default="cloud Claude")
+    m.add_argument("--text-file", help="file with the message; stdin if omitted")
     for name in ("status", "wait", "output", "progress", "log"):
         q = sub.add_parser(name)
         q.add_argument("id")
@@ -65,6 +71,11 @@ def main():
             payload["sessionId"] = a.session
         r = call("POST", "/tasks", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
         print(json.dumps(r, ensure_ascii=False))
+    elif a.cmd == "add":
+        text = open(a.text_file, encoding="utf-8").read() if a.text_file else sys.stdin.read()
+        payload = {"text": text.strip(), "cursor": a.cursor, "sender": a.sender}
+        r = call("POST", f"/tasks/{a.id}/messages", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        print(json.dumps(r, ensure_ascii=False))
     elif a.cmd == "output":
         sys.stdout.write(call("GET", f"/tasks/{a.id}/output"))
     elif a.cmd == "log":
@@ -74,8 +85,12 @@ def main():
         print(f"status: {r['status']}" + (f" (decided via {r['decidedBy']})" if r.get("decidedBy") else ""))
         if r.get("lastActivity"):
             print(f"last activity: {r['lastActivity']}")
+        if r.get("status") == "RUNNING":
+            print(f"cursor: {r.get('cursor')}")
         for s in r.get("steps") or []:
             print(s)
+        for msg in r.get("messages") or []:
+            print(f"message {msg['id']}: {msg['status']}")
     elif a.cmd == "status":
         print(json.dumps(call("GET", f"/tasks/{a.id}"), ensure_ascii=False, indent=2))
     else:

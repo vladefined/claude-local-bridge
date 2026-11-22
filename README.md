@@ -70,6 +70,32 @@ the last 15 steps such as `→ Bash(mvn test)`), and after the run read the whol
 as a readable log with `GET /tasks/{id}/log` (`<task id>.log.txt`). The log is also
 attached to the Telegram result (`bridge.telegram.send-log: false` turns that off).
 
+### Adding to a running task
+
+Input is `--input-format stream-json` as well: the task is the first user message and
+stdin stays open while the agent works. The caller can send
+`POST /tasks/{id}/messages` with `{"text", "cursor", "sender"}`; the owner approves it
+in Telegram or a toast like a task, and the approved text is written to the running
+session, which picks it up between tool calls.
+
+- The `cursor` comes from `GET /tasks/{id}/progress`. A message without it, or written
+  more than 3 agent steps ago, is refused (409), so the caller has to look at what the
+  agent is doing before adding to it. The approval request shows the agent's latest
+  steps next to the text.
+- The same text rules as for tasks (length, no invisible characters); the message goes
+  through stdin as a JSON string, never on the command line.
+- The bridge closes stdin as soon as a final answer (`result` event) appears that was
+  written after the last message it sent, i.e. the agent has answered everything it
+  was given. After that nothing more can be added: messages still waiting are cancelled
+  (`UNDELIVERED`, their Telegram message is edited), and the caller should send a new
+  task with mode `continue`. Undecided messages expire after 10 minutes.
+- The cursor is a byte position in the agent's output, not a step number (progress
+  reads only the tail of the stream). From it the bridge counts the steps made since
+  and lists them in the approval request.
+- Delivered messages appear in progress and in the log as `✉ Message from the caller`.
+
+`bridge.runner.command` must therefore accept stream-json input; Claude Code does.
+
 Expose port 8765 (API only) with a tunnel, e.g. a named Cloudflare Tunnel on your
 domain. Do **not** expose 8766 (local approval page).
 

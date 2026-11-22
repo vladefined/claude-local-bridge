@@ -54,6 +54,29 @@ Use `progress` when the owner asks how the PC task is going, or when a run takes
 and you want to know whether it is stuck. Don't call it more than about once a minute.
 `last activity` is when the agent last produced anything.
 
+## Adding to a running task
+
+While a task is `RUNNING` you can send the agent a correction or an extra instruction.
+It reaches the same session (the agent picks it up between tool calls), but only after
+the owner approves its exact text, like a task.
+
+1. Run `progress <id>` and **read the steps**: what is the agent doing right now? Is the
+   message still needed, and does it fit that state?
+2. Write the message for that state, then send it with the `cursor` that `progress`
+   printed:
+
+```bash
+python3 scripts/send_task.py add <id> --cursor <cursor> --text-file msg.txt
+```
+
+The bridge refuses the message (HTTP 409) if the agent made more than 3 steps since that
+cursor: run `progress` again and rethink. It also refuses it if the task is not running;
+then send a new task with `--mode continue`. After `add`, `progress` lists the message
+and its status: `PENDING` (waiting for the owner), `DELIVERED` (handed to the agent,
+shown as "✉" among the steps), `REJECTED`, `EXPIRED` (10 min without a decision), or
+`UNDELIVERED` (the task finished first; nothing reached the agent). A message the agent
+gets while it waits on one long command (a long test run) is seen when that command ends.
+
 `--mode`: `new` (fresh session), `continue` (last session in that folder), or
 `resume --session <id>` (a specific session id returned by an earlier task).
 

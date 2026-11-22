@@ -19,6 +19,9 @@ import dev.vladefined.taskbridge.config.BridgeProperties;
 import dev.vladefined.taskbridge.core.ApprovalChannel;
 import dev.vladefined.taskbridge.core.DecisionAttempt;
 import dev.vladefined.taskbridge.core.Task;
+import dev.vladefined.taskbridge.core.MessageDecisionAttempt;
+import dev.vladefined.taskbridge.core.TaskMessage;
+import dev.vladefined.taskbridge.core.TaskMessageRepository;
 import dev.vladefined.taskbridge.core.TaskRepository;
 import dev.vladefined.taskbridge.core.UiText;
 import dev.vladefined.taskbridge.runner.ClaudeRunner;
@@ -39,6 +42,7 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
     private final TelegramClient client;
     private final long chatId;
     private final TaskRepository repo;
+    private final TaskMessageRepository messages;
     private final ApplicationEventPublisher events;
     private final boolean sendLog;
     private final UiText ui;
@@ -46,7 +50,8 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
     private Thread poller;
 
     public TelegramChannel(BridgeProperties props, ObjectMapper json, TaskRepository repo,
-                           ApplicationEventPublisher events, UiText ui) {
+                           TaskMessageRepository messages, ApplicationEventPublisher events, UiText ui) {
+        this.messages = messages;
         this.ui = ui;
         if (props.telegram().botToken() == null || props.telegram().botToken().isBlank()
                 || props.telegram().chatId() == 0) {
@@ -90,6 +95,26 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
         }
     }
 
+    @Override
+    public void requestMessageApproval(Task t, TaskMessage m, java.util.List<String> since,
+                                       java.util.List<String> recent) {
+        long msgId = client.sendMessage(chatId, TelegramFormat.messageRequest(ui, t, m, since, recent), java.util.List.of(
+                new Button(ui.t("msg.button.send"), "ma:" + m.id()),
+                new Button(ui.t("msg.button.reject"), "mr:" + m.id())), t.telegramMessageId());
+        messages.setTelegramMessageId(m.id(), msgId);
+    }
+
+    @Override
+    public void onMessageUpdated(Task t, TaskMessage m) {
+        if (m.status() == dev.vladefined.taskbridge.core.MessageStatus.APPROVED) {
+            return;                    // DELIVERED or UNDELIVERED follows at once
+        }
+        Long msgId = messages.find(m.id()).map(TaskMessage::telegramMessageId).orElse(null);
+        if (msgId != null) {
+            client.editMessageText(chatId, msgId, TelegramFormat.messageDecided(ui, t, m));
+        }
+    }
+
     private void sendFile(Task t, Path file, String what) {
         try {
             if (Files.size(file) == 0) {
@@ -119,7 +144,23 @@ public class TelegramChannel implements ApprovalChannel, SmartLifecycle {
             log.warn("ignored button press from user {} in chat {}", from, chat);
             return;
         }
-        if (data.length() < 3 || data.charAt(1) != ':') {
+        int colon = data.indexOf(':');
+        if (colon < 1 || colon == data.length() - 1) {
+            return;
+        }
+        String kind = data.substring(0, colon);
+        if (kind.equals("ma") || kind.equals("mr")) {
+            String mid = data.substring(colon + 1);
+            boolean send = kind.equals("ma");
+            events.publishEvent(new MessageDecisionAttempt(mid, send, CHANNEL));
+            TaskMessage m = messages.find(mid).orElse(null);
+            String answer = m == null ? ui.t("callback.not-found")
+                    : m.decidedBy() != null && !CHANNEL.equals(m.decidedBy()) ? ui.t("callback.already", m.status())
+                    : send ? ui.t("callback.sending") : ui.t("callback.rejected");
+            client.answerCallbackQuery(cbId, answer);
+            return;
+        }
+        if (colon != 1) {
             return;
         }
         boolean approve = data.charAt(0) == 'a';

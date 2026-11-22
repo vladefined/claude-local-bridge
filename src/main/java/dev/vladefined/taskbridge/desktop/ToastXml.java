@@ -4,6 +4,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import dev.vladefined.taskbridge.core.Task;
+import dev.vladefined.taskbridge.core.TaskMessage;
 import dev.vladefined.taskbridge.core.UiText;
 
 /** Builds the Windows toast XML. Every piece of task data is XML-escaped. */
@@ -43,6 +44,26 @@ public final class ToastXml {
                 + "</toast>";
     }
 
+    /** Approval toast for a message to a running task. Long text: "Open" instead of "Send", as for tasks. */
+    public static String message(UiText ui, Task t, TaskMessage m, String pageUrl, boolean protocolButtons,
+                                 int previewChars) {
+        boolean fits = m.text().length() <= previewChars;
+        String preview = fits ? m.text() : m.text().substring(0, previewChars) + "…";
+        String send = fits
+                ? action(ui.t("toast.send"), decision(m.desktopToken(), pageUrl, protocolButtons, "approve"))
+                : action(ui.t("toast.open"), pageUrl);
+        return "<toast scenario=\"reminder\" activationType=\"protocol\" launch=\"" + esc(pageUrl) + "\">"
+                + "<visual><binding template=\"ToastGeneric\">"
+                + "<text>" + esc(ui.t("toast.msg.title", t.id()) + " → " + t.folder()) + "</text>"
+                + "<text>" + esc(preview) + "</text>"
+                + "<text placement=\"attribution\">" + esc(ui.t("toast.from", m.sender()) + " · " + m.shortHash()) + "</text>"
+                + "</binding></visual>"
+                + "<actions>" + send
+                + action(ui.t("toast.reject"), decision(m.desktopToken(), pageUrl, protocolButtons, "reject")) + "</actions>"
+                + "<audio src=\"ms-winsoundevent:Notification.Reminder\"/>"
+                + "</toast>";
+    }
+
     /** The toast after a run: the agent's summary (or the start of its answer). Click opens the full output. */
     public static String finished(UiText ui, Task t) {
         String title = ui.t(t.status() == dev.vladefined.taskbridge.core.TaskStatus.DONE ? "result.done" : "result.failed",
@@ -69,7 +90,11 @@ public final class ToastXml {
     }
 
     private static String decision(Task t, String pageUrl, boolean protocolButtons, String what) {
-        return protocolButtons ? SCHEME + ":" + what + "/" + t.desktopToken() : pageUrl + "/" + what;
+        return decision(t.desktopToken(), pageUrl, protocolButtons, what);
+    }
+
+    private static String decision(String token, String pageUrl, boolean protocolButtons, String what) {
+        return protocolButtons ? SCHEME + ":" + what + "/" + token : pageUrl + "/" + what;
     }
 
     private static String action(String label, String url) {

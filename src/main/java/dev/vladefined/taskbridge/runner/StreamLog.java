@@ -1,17 +1,19 @@
 package dev.vladefined.taskbridge.runner;
 
-import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,10 +21,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 /**
  * Reads Claude Code's {@code --output-format stream-json} output: one JSON event per
  * line (system init, assistant messages with text and tool calls, tool results, and a
- * final {@code result} event).
+ * {@code result} event at the end of every turn).
  *
  * <p>Everything here is read line by line from the file on disk; the whole stream is
  * never held in memory. Text taken from events is shown as plain text only.
+ *
+ * <p>Positions in the stream are byte offsets. A <em>cursor</em> is the offset just
+ * after the last complete line; messages added during the run are placed in progress
+ * and in the log at the offset where they were handed to the agent.
  */
 public final class StreamLog {
 
@@ -32,84 +38,213 @@ public final class StreamLog {
     static final int TOOL_RESULT_CHARS = 1500;
     /** Progress reads only the end of a running stream. */
     static final int TAIL_BYTES = 512 * 1024;
+    /** Counting steps after a cursor reads at most this much; more means "far behind". */
+    static final int SINCE_MAX_BYTES = 4 * 1024 * 1024;
 
     private StreamLog() {
     }
 
-    /** The final event: what used to be the single JSON object of {@code --output-format json}. */
+    /** The final answer. With several turns (messages added after an answer) the answers are joined. */
     public record Final(String result, boolean isError, String sessionId) {
     }
 
+    /** A message handed to the agent at {@code offset} in the stream. */
+    public record Insert(long offset, String text) {
+    }
+
+    /** The last steps and the cursor they end at. */
+    public record Snapshot(List<String> steps, long cursor) {
+    }
+
     /**
-     * The last {@code result} event. A single JSON object with a {@code result} field
+     * All {@code result} events, joined. A single JSON object with a {@code result} field
      * (the old json format, or a stand-in for claude) is accepted too.
      */
     public static Final findFinal(Path stdout, ObjectMapper json) throws IOException {
-        Final last = null;
-        try (BufferedReader r = Files.newBufferedReader(stdout, StandardCharsets.UTF_8)) {
-            for (String line; (line = r.readLine()) != null; ) {
-                JsonNode n = parse(line, json);
-                if (n == null || !n.has("result")) {
-                    continue;
-                }
-                String type = n.path("type").asText("");
-                if (type.isEmpty() || "result".equals(type)) {
-                    last = new Final(n.path("result").asText(""), n.path("is_error").asBoolean(false),
-                            n.path("session_id").asText(null));
-                }
+        List<String> results = new ArrayList<>();
+        boolean[] error = {false};
+        String[] session = {null};
+        forEachLine(stdout, 0, true, (offset, line) -> {
+            JsonNode n = parse(line, json);
+            if (isFinal(n)) {
+                results.add(n.path("result").asText(""));
+                error[0] = n.path("is_error").asBoolean(false);
+                session[0] = n.path("session_id").asText(null);
             }
+        });
+        if (results.isEmpty()) {
+            return null;
         }
-        return last;
+        return new Final(String.join("\n\n", results), error[0], session[0]);
     }
 
-    /** Writes a readable transcript of the whole run. */
-    public static void writeTranscript(Path stdout, Path out, ObjectMapper json) throws IOException {
-        try (BufferedReader r = Files.newBufferedReader(stdout, StandardCharsets.UTF_8);
-             BufferedWriter w = Files.newBufferedWriter(out, StandardCharsets.UTF_8)) {
-            for (String line; (line = r.readLine()) != null; ) {
-                for (String s : describe(parse(line, json), true)) {
-                    w.write(s);
-                    w.write("\n");
+    /** True for a {@code result} event (or the single-object json format). */
+    static boolean isFinal(JsonNode n) {
+        if (n == null || !n.has("result")) {
+            return false;
+        }
+        String type = n.path("type").asText("");
+        return type.isEmpty() || "result".equals(type);
+    }
+
+    /** Writes a readable transcript of the whole run, with added messages where they were delivered. */
+    public static void writeTranscript(Path stdout, Path out, ObjectMapper json, List<Insert> inserts)
+            throws IOException {
+        Iterator<Insert> ins = sorted(inserts).iterator();
+        Insert[] next = {ins.hasNext() ? ins.next() : null};
+        try (BufferedWriter w = Files.newBufferedWriter(out, StandardCharsets.UTF_8)) {
+            IOException[] failed = {null};
+            forEachLine(stdout, 0, true, (offset, line) -> {
+                try {
+                    while (next[0] != null && next[0].offset() <= offset) {
+                        w.write("\n" + insertLine(next[0], true) + "\n");
+                        next[0] = ins.hasNext() ? ins.next() : null;
+                    }
+                    for (String s : describe(parse(line, json), true)) {
+                        w.write(s);
+                        w.write("\n");
+                    }
+                } catch (IOException e) {
+                    failed[0] = e;
                 }
+            });
+            while (next[0] != null) {
+                w.write("\n" + insertLine(next[0], true) + "\n");
+                next[0] = ins.hasNext() ? ins.next() : null;
+            }
+            if (failed[0] != null) {
+                throw failed[0];
             }
         }
+    }
+
+    public static void writeTranscript(Path stdout, Path out, ObjectMapper json) throws IOException {
+        writeTranscript(stdout, out, json, List.of());
     }
 
     /** The last {@code max} steps of a stream that may still be growing. */
     public static List<String> recentSteps(Path stdout, int max, ObjectMapper json) throws IOException {
-        if (!Files.isRegularFile(stdout)) {
-            return List.of();
-        }
-        Deque<String> steps = new ArrayDeque<>();
-        for (String line : tailLines(stdout)) {
-            for (String s : describe(parse(line, json), false)) {
-                steps.addLast(s);
-                if (steps.size() > max) {
-                    steps.removeFirst();
-                }
-            }
-        }
-        return new ArrayList<>(steps);
+        return snapshot(stdout, max, json, List.of()).steps();
     }
 
-    /** Complete lines from the end of the file; a line cut by the tail window or still being written is dropped. */
-    static List<String> tailLines(Path file) throws IOException {
-        try (RandomAccessFile f = new RandomAccessFile(file.toFile(), "r")) {
-            long len = f.length();
-            long start = Math.max(0, len - TAIL_BYTES);
-            byte[] buf = new byte[(int) (len - start)];
-            f.seek(start);
-            f.readFully(buf);
-            String s = new String(buf, StandardCharsets.UTF_8);
-            List<String> lines = new ArrayList<>(List.of(s.split("\n", -1)));
-            if (start > 0 && !lines.isEmpty()) {
-                lines.remove(0);
-            }
-            if (!lines.isEmpty()) {
-                lines.remove(lines.size() - 1);   // after the last \n: empty or incomplete
-            }
-            return lines;
+    /** The last {@code max} steps (added messages included) and the cursor after the last complete line. */
+    public static Snapshot snapshot(Path stdout, int max, ObjectMapper json, List<Insert> inserts)
+            throws IOException {
+        if (!Files.isRegularFile(stdout)) {
+            return new Snapshot(List.of(), 0);
         }
+        Deque<String> steps = new ArrayDeque<>();
+        long len = Files.size(stdout);
+        long start = Math.max(0, len - TAIL_BYTES);
+        Iterator<Insert> ins = sorted(inserts).stream().filter(i -> i.offset() >= start).iterator();
+        Insert[] next = {ins.hasNext() ? ins.next() : null};
+        long cursor = forEachLine(stdout, start, (offset, line) -> {
+            while (next[0] != null && next[0].offset() <= offset) {
+                add(steps, insertLine(next[0], false), max);
+                next[0] = ins.hasNext() ? ins.next() : null;
+            }
+            for (String s : describe(parse(line, json), false)) {
+                add(steps, s, max);
+            }
+        });
+        while (next[0] != null && next[0].offset() <= cursor) {
+            add(steps, insertLine(next[0], false), max);
+            next[0] = ins.hasNext() ? ins.next() : null;
+        }
+        return new Snapshot(new ArrayList<>(steps), Math.max(cursor, start));
+    }
+
+    /**
+     * How many steps the agent made after {@code cursor}; {@code Integer.MAX_VALUE} if the
+     * cursor is not a position in this stream or is very far behind.
+     */
+    public static int stepsSince(Path stdout, long cursor, ObjectMapper json) throws IOException {
+        List<String> s = stepsAfter(stdout, cursor, json);
+        return s == null ? Integer.MAX_VALUE : s.size();
+    }
+
+    /**
+     * The steps the agent made after {@code cursor}, or null if the cursor is not a
+     * position in this stream or is very far behind.
+     */
+    public static List<String> stepsAfter(Path stdout, long cursor, ObjectMapper json) throws IOException {
+        if (!Files.isRegularFile(stdout)) {
+            return cursor == 0 ? List.of() : null;
+        }
+        long len = Files.size(stdout);
+        if (cursor < 0 || cursor > len || len - cursor > SINCE_MAX_BYTES) {
+            return null;
+        }
+        List<String> out = new ArrayList<>();
+        forEachLine(stdout, cursor, (offset, line) -> out.addAll(describe(parse(line, json), false)));
+        return out;
+    }
+
+    private static void add(Deque<String> steps, String s, int max) {
+        steps.addLast(s);
+        if (steps.size() > max) {
+            steps.removeFirst();
+        }
+    }
+
+    private static List<Insert> sorted(List<Insert> inserts) {
+        List<Insert> l = new ArrayList<>(inserts == null ? List.of() : inserts);
+        l.sort(Comparator.comparingLong(Insert::offset));
+        return l;
+    }
+
+    private static String insertLine(Insert i, boolean full) {
+        String text = full ? i.text().strip() : cut(oneLine(i.text()), STEP_CHARS);
+        return "✉ Message from the caller (approved): " + (full ? indent(text) : text);
+    }
+
+    /**
+     * Calls {@code onLine(offset, line)} for every complete line starting at {@code from}
+     * (or at the first line start after it, when {@code from} is inside a line).
+     *
+     * @return the offset just after the last complete line (the cursor)
+     */
+    static long forEachLine(Path file, long from, BiConsumer<Long, String> onLine) throws IOException {
+        return forEachLine(file, from, false, onLine);
+    }
+
+    /** @param withTail also pass an unterminated last line (for a finished stream) */
+    static long forEachLine(Path file, long from, boolean withTail, BiConsumer<Long, String> onLine)
+            throws IOException {
+        long pos = from;
+        boolean skipFirst = false;
+        if (from > 0) {
+            try (RandomAccessFile f = new RandomAccessFile(file.toFile(), "r")) {
+                f.seek(from - 1);
+                skipFirst = f.read() != '\n';      // started mid-line: that partial line is dropped
+            }
+        }
+        long lineStart = from;
+        try (InputStream in = Files.newInputStream(file)) {
+            in.skipNBytes(from);
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+            byte[] chunk = new byte[64 * 1024];
+            for (int r; (r = in.read(chunk)) > 0; ) {
+                for (int i = 0; i < r; i++) {
+                    pos++;
+                    if (chunk[i] == '\n') {
+                        if (skipFirst) {
+                            skipFirst = false;
+                        } else {
+                            onLine.accept(lineStart, buf.toString(StandardCharsets.UTF_8));
+                        }
+                        buf.reset();
+                        lineStart = pos;
+                    } else {
+                        buf.write(chunk[i]);
+                    }
+                }
+            }
+            if (withTail && buf.size() > 0 && !skipFirst) {
+                onLine.accept(lineStart, buf.toString(StandardCharsets.UTF_8));
+            }
+        }
+        return lineStart;
     }
 
     private static JsonNode parse(String line, ObjectMapper json) {
@@ -171,7 +306,9 @@ public final class StreamLog {
                 String end = "[end] " + (n.path("is_error").asBoolean(false) ? "error" : "done")
                         + (n.has("num_turns") ? ", turns " + n.path("num_turns").asInt() : "")
                         + (n.has("duration_ms") ? ", " + n.path("duration_ms").asLong() / 1000 + " s" : "")
-                        + (n.has("total_cost_usd") ? String.format(java.util.Locale.ROOT, ", $%.4f",n.path("total_cost_usd").asDouble()) : "");
+                        + (n.has("total_cost_usd")
+                                ? String.format(java.util.Locale.ROOT, ", $%.4f", n.path("total_cost_usd").asDouble())
+                                : "");
                 out.add(full ? "\n" + end : end);
             }
             default -> { }

@@ -83,6 +83,17 @@ class BridgeFlowTest {
         public void onFinished(Task t) {
             events.add("finished:" + t.id() + ":" + t.status());
         }
+
+        @Override
+        public void requestMessageApproval(Task t, dev.vladefined.taskbridge.core.TaskMessage m,
+                                           List<String> since, List<String> recent) {
+            events.add("msg-request:" + m.id() + ":" + since.size() + ":" + recent.size());
+        }
+
+        @Override
+        public void onMessageUpdated(Task t, dev.vladefined.taskbridge.core.TaskMessage m) {
+            events.add("msg:" + m.id() + ":" + m.status());
+        }
     }
 
     @TestConfiguration
@@ -239,6 +250,87 @@ class BridgeFlowTest {
         String sig = HexFormat.of().formatHex(hmac.sign(ts, "n-1", "GET", "/tasks/" + id + "/progress", new byte[0]));
         mvc.perform(get("/tasks/" + id + "/log").header("X-Bridge-Timestamp", ts).header("X-Bridge-Nonce", "n-1")
                 .header("X-Bridge-Signature", sig)).andExpect(status().isUnauthorized());
+    }
+
+    MockHttpServletRequestBuilder message(String id, String body) {
+        byte[] b = body.getBytes(StandardCharsets.UTF_8);
+        return signed(post("/tasks/" + id + "/messages"), "POST", "/tasks/" + id + "/messages", b);
+    }
+
+    @Test
+    void messageToARunningTaskNeedsAFreshCursorAndTheOwnersApproval() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        Path stream = tmp.resolve("live.stdout.json");
+        // the agent has made 4 steps and is still working (no result event yet)
+        java.nio.file.Files.writeString(stream, StreamLogTest.STREAM.substring(0,
+                StreamLogTest.STREAM.indexOf("{\"type\":\"result\"")), StandardCharsets.UTF_8);
+        when(runner.runningStdout(any())).thenReturn(stream);
+        when(runner.isLive(any())).thenReturn(true);
+        // like the real runner: delivered at the current end of the stream
+        when(runner.deliver(any(), any())).thenAnswer(inv -> java.nio.file.Files.size(stream));
+        when(runner.run(any(), any())).thenAnswer(inv -> {
+            release.await(20, java.util.concurrent.TimeUnit.SECONDS);
+            return new RunResult(true, "ok", "s-1", null);
+        });
+        try {
+            String id = submit("long job");
+            // before it runs: refused, the caller is told to send a new task
+            mvc.perform(message(id, "{\"text\":\"x\",\"cursor\":0}")).andExpect(status().isConflict());
+            tasks.decide(id, true, "telegram");
+            long until = System.currentTimeMillis() + 5000;
+            while (tasks.find(id).orElseThrow().status() != TaskStatus.RUNNING) {
+                assertThat(System.currentTimeMillis()).isLessThan(until);
+                Thread.sleep(20);
+            }
+            String progress = mvc.perform(signed(get("/tasks/" + id + "/progress"), "GET",
+                            "/tasks/" + id + "/progress", new byte[0]))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            long cursor = json.readTree(progress).path("cursor").asLong();
+            assertThat(cursor).isEqualTo(java.nio.file.Files.size(stream));
+
+            // no cursor: the caller has not looked at what the agent is doing
+            mvc.perform(message(id, "{\"text\":\"also run lint\"}")).andExpect(status().isBadRequest());
+            // cursor from the start: 4 steps behind, more than 3
+            mvc.perform(message(id, "{\"text\":\"also run lint\",\"cursor\":0}"))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.stepsBehind").value(4));
+            // invisible characters are refused like in tasks
+            mvc.perform(message(id, "{\"text\":\"a\\u202Eb\",\"cursor\":" + cursor + "}"))
+                    .andExpect(status().isBadRequest());
+
+            String resp = mvc.perform(message(id, "{\"text\":\"also run lint\",\"cursor\":" + cursor
+                            + ",\"sender\":\"cloud\"}"))
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.status").value("PENDING"))
+                    .andReturn().getResponse().getContentAsString();
+            String mid = json.readTree(resp).path("id").asText();
+            assertThat(channel.events).contains("msg-request:" + mid + ":0:3");
+            verify(runner, times(0)).deliver(any(), any());     // nothing before approval
+
+            assertThat(tasks.decideMessage(mid, true, "telegram")).isTrue();
+            assertThat(tasks.decideMessage(mid, false, "desktop")).isFalse();
+            verify(runner).deliver(id, "also run lint");
+            assertThat(channel.events).contains("msg:" + mid + ":DELIVERED");
+            mvc.perform(signed(get("/tasks/" + id + "/progress"), "GET", "/tasks/" + id + "/progress", new byte[0]))
+                    .andExpect(jsonPath("$.messages[0].status").value("DELIVERED"))
+                    .andExpect(jsonPath("$.steps[-1]").value("✉ Message from the caller (approved): also run lint"));
+
+            // a second message stays pending; when the task ends it is reported as not delivered
+            String resp2 = mvc.perform(message(id, "{\"text\":\"and docs\",\"cursor\":" + cursor + "}"))
+                    .andExpect(status().isAccepted()).andReturn().getResponse().getContentAsString();
+            String mid2 = json.readTree(resp2).path("id").asText();
+            release.countDown();
+            until = System.currentTimeMillis() + 5000;
+            while (tasks.find(id).orElseThrow().status() == TaskStatus.RUNNING) {
+                assertThat(System.currentTimeMillis()).isLessThan(until);
+                Thread.sleep(20);
+            }
+            assertThat(channel.events).contains("msg:" + mid2 + ":UNDELIVERED");
+            mvc.perform(signed(get("/tasks/" + id), "GET", "/tasks/" + id, new byte[0]))
+                    .andExpect(jsonPath("$.messages[1].status").value("UNDELIVERED"));
+        } finally {
+            release.countDown();
+        }
     }
 
     @Test

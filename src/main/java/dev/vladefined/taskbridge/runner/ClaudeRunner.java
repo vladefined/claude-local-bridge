@@ -3,6 +3,7 @@ package dev.vladefined.taskbridge.runner;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -10,7 +11,8 @@ import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
@@ -40,6 +42,14 @@ import dev.vladefined.taskbridge.core.Task;
  * tool call is one line in {@code <task id>.stdout.json}. While it runs, that file is
  * what {@link StreamLog#recentSteps} reads for progress; afterwards a readable
  * transcript is written next to it as {@code <task id>.log.txt}.
+ *
+ * <p>Input is {@code --input-format stream-json} too: the task text is the first user
+ * message, and stdin stays open while the agent works, so messages the owner approved
+ * during the run ({@link #deliver}) reach the same session. The agent picks them up
+ * between tool calls. stdin is closed as soon as a {@code result} event appears that was
+ * written after the last message sent: the agent has answered everything it was given.
+ * A message sent after an answer was written keeps stdin open until the agent answers
+ * it too. Once closed, further messages are refused, never silently dropped.
  */
 @Component
 public class ClaudeRunner {
@@ -56,6 +66,7 @@ public class ClaudeRunner {
 
     private final BridgeProperties props;
     private final ObjectMapper json;
+    private final Map<String, LiveSession> live = new ConcurrentHashMap<>();
 
     public ClaudeRunner(BridgeProperties props, ObjectMapper json) {
         this.props = props;
@@ -68,6 +79,8 @@ public class ClaudeRunner {
         cmd.add("--output-format");
         cmd.add("stream-json");
         cmd.add("--verbose");     // required by stream-json in -p mode
+        cmd.add("--input-format");
+        cmd.add("stream-json");   // the task and later messages are JSON lines on stdin
         switch (task.mode()) {
             case NEW -> { }
             case CONTINUE -> cmd.add("--continue");
@@ -114,31 +127,26 @@ public class ClaudeRunner {
         } catch (IOException e) {
             return new RunResult(false, "Could not start Claude Code: " + e.getMessage(), null, null);
         }
-        try (OutputStream stdin = p.getOutputStream()) {
-            stdin.write(task.text().getBytes(StandardCharsets.UTF_8));
-        } catch (IOException e) {
+        LiveSession session = new LiveSession(p.getOutputStream(), stdout);
+        if (session.send(task.text(), json) < 0) {
             p.destroyForcibly();
-            return new RunResult(false, "Could not pass the task to Claude Code: " + e.getMessage(), null, null);
+            return new RunResult(false, "Could not pass the task to Claude Code", null, null);
         }
+        live.put(task.id(), session);
 
         String failure = null;
         try {
-            if (!p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                p.descendants().forEach(ProcessHandle::destroyForcibly);
-                p.destroyForcibly();
-                failure = "Timed out after " + timeout.toMinutes() + " min";
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            p.destroyForcibly();
-            failure = "Interrupted";
+            failure = await(p, session, timeout);
+        } finally {
+            live.remove(task.id());
+            session.close();
         }
         RunResult parsed = failure != null
                 ? new RunResult(false, failure + tail(stderr), null, null)
                 : parse(p.exitValue(), stdout, stderr);
         try {
             Files.writeString(full, parsed.text(), StandardCharsets.UTF_8);
-            writeTranscript(task, stdout, transcript);
+            writeTranscript(task, stdout, transcript, session.delivered());
             Path finalDir = projectOut.resolve(sessionDir(parsed.sessionId()));
             Files.createDirectories(finalDir);
             for (Path f : List.of(stdout, stderr, transcript)) {
@@ -168,10 +176,188 @@ public class ClaudeRunner {
         return Path.of(task.outputPath()).resolveSibling(task.id() + suffix);
     }
 
-    private void writeTranscript(Task task, Path stdout, Path transcript) {
+    /**
+     * Waits for the process, closing stdin once the agent has answered.
+     *
+     * @return a failure text, or null if the process ended by itself
+     */
+    private String await(Process p, LiveSession session, Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        ResultWatcher watcher = new ResultWatcher(session.stdout);
+        try {
+            while (p.isAlive()) {
+                if (System.nanoTime() > deadline) {
+                    p.descendants().forEach(ProcessHandle::destroyForcibly);
+                    p.destroyForcibly();
+                    return "Timed out after " + timeout.toMinutes() + " min";
+                }
+                long answeredAt = watcher.lastResultOffset(json);
+                if (answeredAt >= 0) {
+                    session.closeIfAnsweredAfterLastMessage(answeredAt);
+                }
+                Thread.sleep(250);
+            }
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            p.destroyForcibly();
+            return "Interrupted";
+        }
+    }
+
+    /** Is the agent for this task running and still accepting messages? */
+    public boolean isLive(String taskId) {
+        LiveSession s = live.get(taskId);
+        return s != null && !s.isClosed();
+    }
+
+    /**
+     * Hands an approved message to the running agent.
+     *
+     * @return the stream offset at which it was delivered, or -1 if the agent no longer
+     *         accepts messages (finished, answering, or not running)
+     */
+    public long deliver(String taskId, String text) {
+        LiveSession s = live.get(taskId);
+        return s == null ? -1 : s.send(text, json);
+    }
+
+    /** The task's stdin, one JSON user message per line. Closed exactly once; then send() refuses. */
+    public static final class LiveSession {
+        private final OutputStream stdin;
+        final Path stdout;
+        private final List<StreamLog.Insert> delivered = new ArrayList<>();
+        private long lastSentAt;
+        private boolean closed;
+
+        public LiveSession(OutputStream stdin, Path stdout) {
+            this.stdin = stdin;
+            this.stdout = stdout;
+        }
+
+        /** @return the stream offset at sending time, or -1 if stdin is closed */
+        public synchronized long send(String text, ObjectMapper json) {
+            if (closed) {
+                return -1;
+            }
+            try {
+                long offset = Files.exists(stdout) ? Files.size(stdout) : 0;
+                var msg = json.createObjectNode();
+                msg.put("type", "user");
+                var inner = msg.putObject("message");
+                inner.put("role", "user");
+                inner.put("content", text);
+                stdin.write((json.writeValueAsString(msg) + "\n").getBytes(StandardCharsets.UTF_8));
+                stdin.flush();
+                lastSentAt = offset;
+                if (!delivered.isEmpty() || offset > 0) {
+                    delivered.add(new StreamLog.Insert(offset, text));
+                } else {
+                    delivered.add(null);      // the task itself, not an added message
+                }
+                return offset;
+            } catch (IOException e) {
+                closed = true;
+                return -1;
+            }
+        }
+
+        public synchronized boolean isClosed() {
+            return closed;
+        }
+
+        /**
+         * Close stdin if the answer at {@code resultOffset} was written after the last
+         * message was sent. Checked and closed under the same lock as {@link #send}, so a
+         * message is either before the close (and answered) or refused.
+         */
+        public synchronized boolean closeIfAnsweredAfterLastMessage(long resultOffset) {
+            if (!closed && resultOffset >= lastSentAt) {
+                close();
+                return true;
+            }
+            return false;
+        }
+
+        public synchronized void close() {
+            if (!closed) {
+                closed = true;
+                try {
+                    stdin.close();
+                } catch (IOException ignored) {
+                    // the process is gone already
+                }
+            }
+        }
+
+        synchronized List<StreamLog.Insert> delivered() {
+            return delivered.stream().filter(java.util.Objects::nonNull).toList();
+        }
+    }
+
+    /** Reads the growing stdout file from where it stopped and reports {@code result} events. */
+    public static final class ResultWatcher {
+        private final Path file;
+        private long pos;
+        private final java.io.ByteArrayOutputStream partial = new java.io.ByteArrayOutputStream();
+
+        private long lineStart;
+
+        public ResultWatcher(Path file) {
+            this.file = file;
+        }
+
+        /** @return the start offset of the last result line read so far, or -1 if none (yet) */
+        private long lastResult = -1;
+
+        public long lastResultOffset(ObjectMapper json) {
+            readMore(json);
+            return lastResult;
+        }
+
+        private boolean readMore(ObjectMapper json) {
+            boolean seen = false;
+            try (RandomAccessFile f = new RandomAccessFile(file.toFile(), "r")) {
+                long len = f.length();
+                if (len <= pos) {
+                    return false;
+                }
+                f.seek(pos);
+                byte[] buf = new byte[(int) Math.min(len - pos, 1 << 20)];
+                f.readFully(buf);
+                long at = pos;
+                pos += buf.length;
+                for (byte b : buf) {
+                    at++;
+                    if (b == '\n') {
+                        String line = partial.toString(StandardCharsets.UTF_8);
+                        partial.reset();
+                        if (line.contains("\"result\"")) {
+                            try {
+                                if (StreamLog.isFinal(json.readTree(line))) {
+                                    lastResult = lineStart;
+                                    seen = true;
+                                }
+                            } catch (IOException ignored) {
+                                // not JSON
+                            }
+                        }
+                        lineStart = at;
+                    } else if (partial.size() < (8 << 20)) {
+                        partial.write(b);
+                    }
+                }
+            } catch (IOException e) {
+                return false;
+            }
+            return seen;
+        }
+    }
+
+    private void writeTranscript(Task task, Path stdout, Path transcript, List<StreamLog.Insert> inserts) {
         try {
             if (Files.exists(stdout) && Files.size(stdout) <= MAX_PARSE_BYTES) {
-                StreamLog.writeTranscript(stdout, transcript, json);
+                StreamLog.writeTranscript(stdout, transcript, json, inserts);
             }
         } catch (IOException | RuntimeException e) {
             log.warn("task {}: could not write the transcript: {}", task.id(), e.toString());

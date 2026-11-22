@@ -25,7 +25,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.vladefined.taskbridge.core.HmacVerifier;
 import dev.vladefined.taskbridge.core.HmacVerifier.AuthException;
+import dev.vladefined.taskbridge.core.NewMessage;
 import dev.vladefined.taskbridge.core.NewTask;
+import dev.vladefined.taskbridge.core.TaskMessage;
 import dev.vladefined.taskbridge.core.Task;
 import dev.vladefined.taskbridge.core.TaskService;
 import dev.vladefined.taskbridge.runner.ClaudeRunner;
@@ -75,8 +77,31 @@ public class TaskController {
             @RequestHeader(value = SIG, required = false) String sig) {
         hmac.verify("GET", "/tasks/" + id, ts, nonce, sig, new byte[0]);
         return tasks.find(id)
-                .map(t -> ResponseEntity.ok(view(t)))
+                .map(t -> ResponseEntity.ok(view(t, tasks.progress(id).map(p -> p.messages()).orElse(java.util.List.of()))))
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Add a message to a running task. Body: {@code {"text": "...", "cursor": <from progress>,
+     * "sender": "..."}}. The owner approves it like a task; then it is handed to the agent.
+     */
+    @PostMapping("/tasks/{id}/messages")
+    public ResponseEntity<Map<String, Object>> addMessage(
+            @PathVariable String id,
+            @RequestHeader(value = TS, required = false) String ts,
+            @RequestHeader(value = NONCE, required = false) String nonce,
+            @RequestHeader(value = SIG, required = false) String sig,
+            @RequestBody(required = false) byte[] body) throws IOException {
+        byte[] raw = body == null ? new byte[0] : body;
+        hmac.verify("POST", "/tasks/" + id + "/messages", ts, nonce, sig, raw);
+        NewMessage req = json.readValue(raw, NewMessage.class);
+        if (tasks.find(id).isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        TaskMessage m = tasks.submitMessage(id, req);
+        Map<String, Object> v = messageView(m);
+        v.put("taskId", m.taskId());
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(v);
     }
 
     /** Full result text when {@code resultTruncated} is true. */
@@ -107,7 +132,9 @@ public class TaskController {
             m.put("status", p.task().status());
             m.put("decidedBy", p.task().decidedBy());
             m.put("lastActivity", p.lastActivity() == null ? null : p.lastActivity().toString());
+            m.put("cursor", p.cursor());
             m.put("steps", p.steps());
+            m.put("messages", p.messages().stream().map(TaskController::messageView).toList());
             return ResponseEntity.ok(m);
         }).orElse(ResponseEntity.notFound().build());
     }
@@ -125,6 +152,23 @@ public class TaskController {
                 .filter(Files::isRegularFile)
                 .map(p -> ResponseEntity.ok((Resource) new FileSystemResource(p)))
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    private static Map<String, Object> messageView(TaskMessage m) {
+        Map<String, Object> v = new LinkedHashMap<>();
+        v.put("id", m.id());
+        v.put("status", m.status());
+        v.put("decidedBy", m.decidedBy());
+        v.put("sha256", m.sha256());
+        return v;
+    }
+
+    private static Map<String, Object> view(Task t, java.util.List<TaskMessage> msgs) {
+        Map<String, Object> m = view(t);
+        if (!msgs.isEmpty()) {
+            m.put("messages", msgs.stream().map(TaskController::messageView).toList());
+        }
+        return m;
     }
 
     private static Map<String, Object> view(Task t) {
@@ -145,6 +189,16 @@ public class TaskController {
         // Log the reason locally, tell the caller nothing useful.
         log.warn("rejected request: {}", e.getMessage());
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "unauthorized"));
+    }
+
+    @ExceptionHandler(TaskService.Conflict.class)
+    ResponseEntity<Map<String, Object>> conflict(TaskService.Conflict e) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("error", e.getMessage());
+        if (e.stepsBehind() >= 0) {
+            m.put("stepsBehind", e.stepsBehind() == Integer.MAX_VALUE ? null : e.stepsBehind());
+        }
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(m);
     }
 
     @ExceptionHandler({IllegalArgumentException.class, IOException.class})
