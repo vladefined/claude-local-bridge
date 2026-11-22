@@ -5,3 +5,5 @@ target/
 *.iml
 outputs/
 __pycache__/
+logs/
+tmp/
