@@ -69,6 +69,11 @@ public class ClaudeRunner {
                 cmd.add(task.resumeSessionId());
             }
         }
+        String summaryPrompt = props.runner().summaryPrompt();
+        if (summaryPrompt != null && !summaryPrompt.isBlank()) {
+            cmd.add("--append-system-prompt");
+            cmd.add(summaryPrompt);
+        }
         if (!folder.allowedTools().isEmpty()) {
             cmd.add("--allowedTools");
             cmd.add(String.join(",", folder.allowedTools()));

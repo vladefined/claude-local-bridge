@@ -98,6 +98,7 @@ public class TaskController {
         m.put("status", t.status());
         m.put("sha256", t.sha256());
         m.put("decidedBy", t.decidedBy());
+        m.put("summary", t.summary());
         m.put("result", t.result());
         m.put("resultTruncated", t.resultTruncated());
         m.put("sessionId", t.sessionId());

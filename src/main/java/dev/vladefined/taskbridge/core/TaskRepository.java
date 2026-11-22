@@ -37,8 +37,15 @@ public class TaskRepository {
                     session_id TEXT,
                     finished_at INTEGER,
                     result_truncated INTEGER NOT NULL DEFAULT 0,
-                    output_path TEXT
+                    output_path TEXT,
+                    summary TEXT
                 )""");
+        // databases created before the summary column existed
+        boolean hasSummary = jdbc.queryForList("PRAGMA table_info(tasks)").stream()
+                .anyMatch(c -> "summary".equals(c.get("name")));
+        if (!hasSummary) {
+            jdbc.execute("ALTER TABLE tasks ADD COLUMN summary TEXT");
+        }
     }
 
     public void insert(Task t) {
@@ -84,11 +91,11 @@ public class TaskRepository {
     }
 
     public void finish(String id, TaskStatus status, String result, boolean truncated, String outputPath,
-                       String sessionId, Instant at) {
+                       String summary, String sessionId, Instant at) {
         jdbc.update("""
                 UPDATE tasks SET status = ?, result = ?, result_truncated = ?, output_path = ?,
-                                 session_id = ?, finished_at = ?
-                WHERE id = ?""", status.name(), result, truncated ? 1 : 0, outputPath, sessionId,
+                                 summary = ?, session_id = ?, finished_at = ?
+                WHERE id = ?""", status.name(), result, truncated ? 1 : 0, outputPath, summary, sessionId,
                 at.toEpochMilli(), id);
     }
 
@@ -123,7 +130,8 @@ public class TaskRepository {
                 rs.getString("session_id"),
                 instant(rs, "finished_at"),
                 rs.getInt("result_truncated") != 0,
-                rs.getString("output_path"));
+                rs.getString("output_path"),
+                rs.getString("summary"));
     }
 
     private static Long nullableLong(ResultSet rs, String col) throws SQLException {

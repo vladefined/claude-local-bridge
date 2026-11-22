@@ -53,7 +53,8 @@ public final class TelegramFormat {
         String note = t.resultTruncated()
                 ? "\n…\n(обрезано, первые " + t.result().length() + " символов; полный вывод во вложении)"
                 : "";
-        String headLine = head + (t.sessionId() != null ? "\nsession: " + t.sessionId() : "") + "\n\n";
+        String headLine = head + (t.sessionId() != null ? "\nsession: " + t.sessionId() : "") + "\n\n"
+                + (t.summary() != null ? "Итог: " + t.summary() + "\n\n" : "");
         int room = LIMIT - headLine.length() - note.length();
         if (body.length() > room) {
             body = body.substring(0, room);

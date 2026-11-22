@@ -23,11 +23,17 @@ bridge:
   desktop:
     enabled: ${BRIDGE_DESKTOP_ENABLED:true}
     port: 8766
+    # Toast buttons decide in the background through a claude-bridge: URL handler
+    # (registered for the current user at startup); false = buttons open the local page
+    protocol-buttons: true
   runner:
     command: claude
     default-timeout: 20m
     output-dir: outputs          # outputs/<folder>/<session id>/<task id>.txt
     output-retention: 30d        # 0 = keep forever; the DB row (short result) is always kept
+    # Asks Claude to end with a "SUMMARY: ..." line, shown first in Telegram and in the
+    # result toast. Uncomment to change it; an empty value turns it off.
+    # summary-prompt: ""
   # Folders the remote side may target, by name. Paths and tools are fixed here,
   # never taken from the request.
   folders:
