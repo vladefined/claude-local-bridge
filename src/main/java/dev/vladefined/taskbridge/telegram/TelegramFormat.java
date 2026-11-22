@@ -1,6 +1,7 @@
 package dev.vladefined.taskbridge.telegram;
 
 import dev.vladefined.taskbridge.core.Task;
+import dev.vladefined.taskbridge.core.TaskMessage;
 import dev.vladefined.taskbridge.core.UiText;
 
 /**
@@ -61,6 +62,46 @@ public final class TelegramFormat {
             body = body.substring(0, room);
         }
         return headLine + body + note;
+    }
+
+    /** Approval request for a message to a running task: the agent's latest steps, then the exact text. */
+    public static String messageRequest(UiText ui, Task t, TaskMessage m, java.util.List<String> recent) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(ui.t("msg.title", t.id(), t.folder())).append('\n')
+                .append(ui.t("msg.sender")).append(": ").append(m.sender()).append('\n')
+                .append("SHA-256: ").append(m.shortHash()).append('\n')
+                .append(ui.t("msg.seen", m.stepsBehind())).append('\n')
+                .append(ui.t("msg.recent")).append('\n');
+        if (recent == null || recent.isEmpty()) {
+            sb.append(ui.t("msg.none")).append('\n');
+        } else {
+            for (String s : recent) {
+                sb.append(s.length() > 200 ? s.substring(0, 200) + "…" : s).append('\n');
+            }
+        }
+        sb.append("────────────\n").append(m.text());
+        String s = sb.toString();
+        return s.length() > LIMIT - 200 ? s.substring(0, LIMIT - 200) : s;
+    }
+
+    /** The message request after something happened to it. */
+    public static String messageDecided(UiText ui, Task t, TaskMessage m) {
+        String head = ui.t("msg.title", t.id(), t.folder()) + "\nSHA-256: " + m.shortHash()
+                + "\n────────────\n" + m.text() + "\n────────────\n";
+        String where = switch (m.decidedBy() == null ? "" : m.decidedBy()) {
+            case "telegram" -> ".telegram";
+            case "desktop" -> ".desktop";
+            default -> "";
+        };
+        String verdict = switch (m.status()) {
+            case DELIVERED -> ui.t("msg.delivered");
+            case UNDELIVERED -> ui.t("msg.undelivered");
+            case REJECTED -> ui.t("verdict.rejected" + where);
+            case EXPIRED -> ui.t("verdict.expired");
+            default -> ui.t("verdict.approved" + where);
+        };
+        String s = head + verdict;
+        return s.length() > LIMIT ? s.substring(s.length() - LIMIT) : s;
     }
 
     private static String mode(UiText ui, Task t) {

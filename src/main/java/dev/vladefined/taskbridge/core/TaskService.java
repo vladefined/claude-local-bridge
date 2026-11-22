@@ -40,6 +40,7 @@ public class TaskService {
     private static final String ID_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
 
     private final TaskRepository repo;
+    private final TaskMessageRepository messages;
     private final BridgeProperties props;
     private final List<ApprovalChannel> channels;
     private final ClaudeRunner runner;
@@ -50,9 +51,10 @@ public class TaskService {
     private final ExecutorService executor = Executors.newSingleThreadExecutor(
             r -> new Thread(r, "claude-runner"));
 
-    public TaskService(TaskRepository repo, BridgeProperties props, List<ApprovalChannel> channels,
-                       ClaudeRunner runner, Clock clock) {
+    public TaskService(TaskRepository repo, TaskMessageRepository messages, BridgeProperties props,
+                       List<ApprovalChannel> channels, ClaudeRunner runner, Clock clock) {
         this.repo = repo;
+        this.messages = messages;
         this.props = props;
         this.channels = channels;
         this.runner = runner;
@@ -89,29 +91,145 @@ public class TaskService {
      *
      * @param lastActivity when the stream file last changed (null if there is none yet)
      */
-    public record Progress(Task task, List<String> steps, Instant lastActivity) {
+    public record Progress(Task task, List<String> steps, Instant lastActivity, long cursor,
+                           List<TaskMessage> messages) {
     }
 
     public static final int PROGRESS_STEPS = 15;
+    /** A message is refused if the agent made more steps than this since the caller's progress read. */
+    public static final int MAX_STEPS_BEHIND = 3;
+    /** A message nobody decided on in this time expires (the agent moves on; context goes stale). */
+    public static final java.time.Duration MESSAGE_TTL = java.time.Duration.ofMinutes(10);
 
     public Optional<Progress> progress(String id) {
         return repo.find(id).map(t -> {
-            Path stream = switch (t.status()) {
-                case RUNNING -> runner.runningStdout(t);
-                case DONE, FAILED -> ClaudeRunner.sibling(t, ClaudeRunner.STDOUT_SUFFIX);
-                default -> null;
-            };
+            List<TaskMessage> msgs = messages.findByTask(id);
+            Path stream = stream(t);
             if (stream == null || !Files.isRegularFile(stream)) {
-                return new Progress(t, List.of(), null);
+                return new Progress(t, List.of(), null, 0, msgs);
             }
             try {
-                return new Progress(t, StreamLog.recentSteps(stream, PROGRESS_STEPS, json),
-                        Files.getLastModifiedTime(stream).toInstant());
+                StreamLog.Snapshot s = StreamLog.snapshot(stream, PROGRESS_STEPS, json, inserts(msgs));
+                return new Progress(t, s.steps(), Files.getLastModifiedTime(stream).toInstant(), s.cursor(), msgs);
             } catch (IOException e) {
                 log.warn("task {}: cannot read progress: {}", id, e.toString());
-                return new Progress(t, List.of(), null);
+                return new Progress(t, List.of(), null, 0, msgs);
             }
         });
+    }
+
+    private Path stream(Task t) {
+        return switch (t.status()) {
+            case RUNNING -> runner.runningStdout(t);
+            case DONE, FAILED -> ClaudeRunner.sibling(t, ClaudeRunner.STDOUT_SUFFIX);
+            default -> null;
+        };
+    }
+
+    private static List<StreamLog.Insert> inserts(List<TaskMessage> msgs) {
+        return msgs.stream().filter(m -> m.status() == MessageStatus.DELIVERED && m.deliveredOffset() != null)
+                .map(m -> new StreamLog.Insert(m.deliveredOffset(), m.text())).toList();
+    }
+
+    /** The request cannot be accepted in the task's current state (HTTP 409). */
+    public static class Conflict extends RuntimeException {
+        private final int stepsBehind;
+
+        public Conflict(String message, int stepsBehind) {
+            super(message);
+            this.stepsBehind = stepsBehind;
+        }
+
+        public int stepsBehind() {
+            return stepsBehind;
+        }
+    }
+
+    /**
+     * A message for a running task. Accepted only if the caller has just looked at the
+     * agent's progress: its cursor must be at most {@link #MAX_STEPS_BEHIND} steps old.
+     * Then the owner is asked, with the agent's latest steps next to the text.
+     */
+    public TaskMessage submitMessage(String taskId, NewMessage request) {
+        Task task = repo.find(taskId).orElseThrow(() -> new java.util.NoSuchElementException(taskId));
+        String text = request.text() == null ? null : request.text().replace("\r\n", "\n");
+        TaskValidator.validateText(text, props.maxTaskChars());
+        if (request.cursor() == null) {
+            throw new IllegalArgumentException("cursor is required: read GET /tasks/" + taskId
+                    + "/progress first and send its cursor");
+        }
+        if (task.status() != TaskStatus.RUNNING || !runner.isLive(taskId)) {
+            throw new Conflict("task " + taskId + " is not running (status " + task.status()
+                    + "); send a new task with mode continue instead", -1);
+        }
+        Path stream = runner.runningStdout(task);
+        int behind;
+        List<String> recent;
+        try {
+            behind = StreamLog.stepsSince(stream, request.cursor(), json);
+            recent = StreamLog.snapshot(stream, 5, json, inserts(messages.findByTask(taskId))).steps();
+        } catch (IOException e) {
+            throw new IllegalStateException("cannot read the task's progress: " + e.getMessage());
+        }
+        if (behind > MAX_STEPS_BEHIND) {
+            throw new Conflict("the agent moved on: " + (behind == Integer.MAX_VALUE ? "unknown" : behind)
+                    + " new steps since your cursor; read progress again and decide whether the message"
+                    + " still makes sense", behind);
+        }
+        TaskMessage m = new TaskMessage(newId(), taskId, text, TaskValidator.cleanSender(request.sender()),
+                sha256(text), MessageStatus.PENDING, null, clock.instant(), null, null, newToken(), behind, null);
+        messages.insert(m);
+        log.info("message {} for task {} received from '{}' ({} steps behind)", m.id(), taskId, m.sender(), behind);
+        for (ApprovalChannel ch : channels) {
+            safely(() -> ch.requestMessageApproval(task, m, recent), ch, "requestMessageApproval");
+        }
+        return m;
+    }
+
+    @EventListener
+    public void onMessageDecisionAttempt(MessageDecisionAttempt a) {
+        decideMessage(a.messageId(), a.approve(), a.channel());
+    }
+
+    /** @return true if this call made the decision. An approved message is handed to the agent at once. */
+    public boolean decideMessage(String id, boolean approve, String channel) {
+        MessageStatus to = approve ? MessageStatus.APPROVED : MessageStatus.REJECTED;
+        if (!messages.tryDecide(id, to, channel, clock.instant())) {
+            return false;
+        }
+        TaskMessage m = messages.find(id).orElseThrow();
+        log.info("message {} {} via {}", id, to, channel);
+        if (approve) {
+            long offset = runner.deliver(m.taskId(), m.text());
+            if (offset >= 0) {
+                messages.markDelivered(id, offset);
+            } else {
+                messages.markUndelivered(id, "task-finished", clock.instant());
+            }
+        }
+        notifyMessage(messages.find(id).orElseThrow());
+        return true;
+    }
+
+    private void notifyMessage(TaskMessage m) {
+        Task t = repo.find(m.taskId()).orElse(null);
+        if (t == null) {
+            return;
+        }
+        log.info("message {} for task {}: {}", m.id(), m.taskId(), m.status());
+        for (ApprovalChannel ch : channels) {
+            safely(() -> ch.onMessageUpdated(t, m), ch, "onMessageUpdated");
+        }
+    }
+
+    /** The task is over: messages still waiting can no longer reach the agent. */
+    private void closeMessages(String taskId) {
+        for (TaskMessage m : messages.findByTask(taskId)) {
+            if ((m.status() == MessageStatus.PENDING || m.status() == MessageStatus.APPROVED)
+                    && messages.markUndelivered(m.id(), "task-finished", clock.instant())) {
+                notifyMessage(messages.find(m.id()).orElseThrow());
+            }
+        }
     }
 
     @EventListener
@@ -143,6 +261,11 @@ public class TaskService {
                 notifyDecided(repo.find(t.id()).orElseThrow());
             }
         }
+        for (TaskMessage m : messages.findPendingCreatedBefore(now.minus(MESSAGE_TTL))) {
+            if (messages.tryDecide(m.id(), MessageStatus.EXPIRED, "timeout", now)) {
+                notifyMessage(messages.find(m.id()).orElseThrow());
+            }
+        }
     }
 
     void run(String id) {
@@ -168,6 +291,7 @@ public class TaskService {
                 r.outputFile() == null ? null : r.outputFile().toString(), split.summary(), r.sessionId(),
                 clock.instant());
         Task finished = repo.find(id).orElseThrow();
+        closeMessages(id);
         for (ApprovalChannel ch : channels) {
             safely(() -> ch.onFinished(finished), ch, "onFinished");
         }
@@ -178,6 +302,9 @@ public class TaskService {
         for (Task t : repo.findInterrupted()) {
             repo.finish(t.id(), TaskStatus.FAILED, "Interrupted by a bridge restart; not re-run.",
                     false, null, null, null, clock.instant());
+        }
+        for (TaskMessage m : messages.findOpen()) {
+            messages.markUndelivered(m.id(), "bridge-restart", clock.instant());
         }
     }
 

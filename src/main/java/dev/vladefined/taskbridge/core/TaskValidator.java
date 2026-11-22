@@ -16,18 +16,7 @@ public final class TaskValidator {
     }
 
     public static void validate(NewTask t, int maxChars) {
-        if (t.text() == null || t.text().isBlank()) {
-            throw new IllegalArgumentException("text is empty");
-        }
-        if (t.text().length() > maxChars) {
-            throw new IllegalArgumentException("text longer than " + maxChars + " characters");
-        }
-        int bad = firstHiddenChar(t.text());
-        if (bad >= 0) {
-            throw new IllegalArgumentException(String.format(
-                    "text contains an invisible or control character U+%04X at index %d",
-                    (int) t.text().charAt(bad), bad));
-        }
+        validateText(t.text(), maxChars);
         if (t.mode() == null) {
             throw new IllegalArgumentException("mode is required");
         }
@@ -39,6 +28,22 @@ public final class TaskValidator {
             }
         } else if (t.sessionId() != null) {
             throw new IllegalArgumentException("sessionId is only allowed with mode RESUME");
+        }
+    }
+
+    /** The same rules for a task and for a message added to a running task. */
+    public static void validateText(String text, int maxChars) {
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("text is empty");
+        }
+        if (text.length() > maxChars) {
+            throw new IllegalArgumentException("text longer than " + maxChars + " characters");
+        }
+        int bad = firstHiddenChar(text);
+        if (bad >= 0) {
+            throw new IllegalArgumentException(String.format(
+                    "text contains an invisible or control character U+%04X at index %d",
+                    (int) text.charAt(bad), bad));
         }
     }
 

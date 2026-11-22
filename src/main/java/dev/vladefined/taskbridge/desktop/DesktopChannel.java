@@ -23,6 +23,10 @@ import dev.vladefined.taskbridge.config.BridgeProperties;
 import dev.vladefined.taskbridge.core.ApprovalChannel;
 import dev.vladefined.taskbridge.core.DecisionAttempt;
 import dev.vladefined.taskbridge.core.Task;
+import dev.vladefined.taskbridge.core.MessageDecisionAttempt;
+import dev.vladefined.taskbridge.core.MessageStatus;
+import dev.vladefined.taskbridge.core.TaskMessage;
+import dev.vladefined.taskbridge.core.TaskMessageRepository;
 import dev.vladefined.taskbridge.core.TaskRepository;
 import dev.vladefined.taskbridge.core.TaskStatus;
 import dev.vladefined.taskbridge.core.UiText;
@@ -45,6 +49,7 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
     public static final String CHANNEL = "desktop";
 
     private final TaskRepository repo;
+    private final TaskMessageRepository messages;
     private final ApplicationEventPublisher events;
     private final WindowsToaster toaster;
     private final UiText ui;
@@ -56,15 +61,16 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
     private HttpServer server;
 
     @Autowired
-    public DesktopChannel(BridgeProperties props, TaskRepository repo, ApplicationEventPublisher events,
-                          UiText ui) {
-        this(props, repo, events, ui, new WindowsToaster(),
+    public DesktopChannel(BridgeProperties props, TaskRepository repo, TaskMessageRepository messages,
+                          ApplicationEventPublisher events, UiText ui) {
+        this(props, repo, messages, events, ui, new WindowsToaster(),
                 System.getProperty("os.name", "").toLowerCase().startsWith("windows"));
     }
 
-    DesktopChannel(BridgeProperties props, TaskRepository repo, ApplicationEventPublisher events,
-                   UiText ui, WindowsToaster toaster, boolean windows) {
+    DesktopChannel(BridgeProperties props, TaskRepository repo, TaskMessageRepository messages,
+                   ApplicationEventPublisher events, UiText ui, WindowsToaster toaster, boolean windows) {
         this.ui = ui;
+        this.messages = messages;
         this.repo = repo;
         this.events = events;
         this.toaster = toaster;
@@ -102,6 +108,24 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
         }
     }
 
+    String pageUrl(TaskMessage m) {
+        return "http://127.0.0.1:" + port + "/t/" + m.desktopToken();
+    }
+
+    @Override
+    public void requestMessageApproval(Task t, TaskMessage m, java.util.List<String> recent) {
+        if (windows) {
+            toaster.show(m.id(), ToastXml.message(ui, t, m, pageUrl(m), protocolReady, previewChars));
+        }
+    }
+
+    @Override
+    public void onMessageUpdated(Task t, TaskMessage m) {
+        if (windows && m.status() != MessageStatus.APPROVED) {
+            toaster.remove(m.id());
+        }
+    }
+
     // ---- local page ----
 
     void handle(HttpExchange ex) throws IOException {
@@ -119,6 +143,21 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
             }
             Optional<Task> found = repo.findByDesktopToken(parts[2]);
             if (found.isEmpty()) {
+                Optional<TaskMessage> msg = messages == null ? Optional.empty() : messages.findByDesktopToken(parts[2]);
+                if (msg.isPresent()) {
+                    TaskMessage m = msg.get();
+                    if (parts.length == 4 && m.status() == MessageStatus.PENDING) {
+                        boolean approve = switch (parts[3]) {
+                            case "approve" -> true;
+                            case "reject" -> false;
+                            default -> throw new IllegalArgumentException("bad action");
+                        };
+                        events.publishEvent(new MessageDecisionAttempt(m.id(), approve, CHANNEL));
+                        m = messages.find(m.id()).orElseThrow();
+                    }
+                    send(ex, 200, render(m));
+                    return;
+                }
                 send(ex, 404, page(ui.t("page.not-found"), "<p>" + h(ui.t("page.bad-link")) + "</p>"));
                 return;
             }
@@ -151,6 +190,25 @@ public class DesktopChannel implements ApprovalChannel, SmartLifecycle {
                     + (t.decidedBy() != null ? " (" + h(t.decidedBy()) + ")" : "") + "</p>";
         }
         return page(ui.t("task.title", t.id()), body);
+    }
+
+    String render(TaskMessage m) {
+        Task t = repo.find(m.taskId()).orElse(null);
+        String body = "<p class=meta>" + h(ui.t("task.title", m.taskId()))
+                + (t != null ? " · " + h(ui.t("task.folder")) + ": <b>" + h(t.folder()) + "</b>" : "")
+                + " · " + h(ui.t("page.from")) + ": " + h(m.sender())
+                + " · SHA-256 " + h(m.shortHash()) + "</p>"
+                + "<p class=meta>" + h(ui.t("msg.seen", m.stepsBehind())) + "</p>"
+                + "<pre>" + h(m.text()) + "</pre>";
+        if (m.status() == MessageStatus.PENDING) {
+            String path = "/t/" + m.desktopToken();
+            body += "<form method=post action='" + h(path) + "/approve'><button class=ok>" + h(ui.t("toast.send")) + "</button></form>"
+                    + "<form method=post action='" + h(path) + "/reject'><button class=no>" + h(ui.t("toast.reject")) + "</button></form>";
+        } else {
+            body += "<p class=status>" + h(ui.t("page.status")) + ": " + h(m.status().name())
+                    + (m.decidedBy() != null ? " (" + h(m.decidedBy()) + ")" : "") + "</p>";
+        }
+        return page(ui.t("toast.msg.title", m.taskId()), body);
     }
 
     private static String pathFor(Task t) {

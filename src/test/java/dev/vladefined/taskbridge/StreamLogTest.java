@@ -89,6 +89,36 @@ class StreamLogTest {
     }
 
     @Test
+    void snapshotGivesACursorAndPlacesDeliveredMessages(@TempDir Path dir) throws Exception {
+        Path f = write(dir, STREAM);
+        long afterRead = STREAM.indexOf("{\"type\":\"user\"");          // offset of the line after Read
+        var s = StreamLog.snapshot(f, 15, json, List.of(new StreamLog.Insert(afterRead, "also lint")));
+        assertThat(s.cursor()).isEqualTo(java.nio.file.Files.size(f));
+        assertThat(s.steps()).containsSubsequence("→ Read(E:\\pibench\\run.py)",
+                "✉ Message from the caller (approved): also lint", "→ Bash(python -m pytest tests)");
+        // a half-written last line does not move the cursor
+        Path g = write(dir, STREAM + "{\"type\":\"assist");
+        assertThat(StreamLog.snapshot(g, 15, json, List.of()).cursor()).isEqualTo(STREAM.getBytes(StandardCharsets.UTF_8).length);
+    }
+
+    @Test
+    void stepsSinceCountsOnlyWhatCameAfterTheCursor(@TempDir Path dir) throws Exception {
+        Path f = write(dir, STREAM);
+        long len = java.nio.file.Files.size(f);
+        assertThat(StreamLog.stepsSince(f, len, json)).isZero();
+        assertThat(StreamLog.stepsSince(f, 0, json)).isEqualTo(5);
+        assertThat(StreamLog.stepsSince(f, len + 1, json)).isEqualTo(Integer.MAX_VALUE);
+        assertThat(StreamLog.stepsSince(f, -5, json)).isEqualTo(Integer.MAX_VALUE);
+    }
+
+    @Test
+    void severalAnswersAreJoined(@TempDir Path dir) throws Exception {
+        String two = STREAM + "{\"type\":\"result\",\"is_error\":false,\"result\":\"late answer\",\"session_id\":\"s-1\"}\n";
+        assertThat(StreamLog.findFinal(write(dir, two), json).result())
+                .isEqualTo("Готово.\nSUMMARY: Прочитал run.py.\n\nlate answer");
+    }
+
+    @Test
     void missingFileHasNoSteps(@TempDir Path dir) throws Exception {
         assertThat(StreamLog.recentSteps(dir.resolve("none"), 5, json)).isEmpty();
     }

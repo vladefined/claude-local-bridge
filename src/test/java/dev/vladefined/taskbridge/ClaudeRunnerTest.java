@@ -9,11 +9,8 @@ import java.util.Map;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermissions;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.DisabledOnOs;
-import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -43,7 +40,8 @@ class ClaudeRunnerTest {
         String evil = "\" & del C:\\* & \"";
         List<String> cmd = r.buildCommand(task(RunMode.CONTINUE, null, evil), FOLDER);
         assertThat(cmd).doesNotContain(evil)
-                .containsExactly("claude", "-p", "--output-format", "stream-json", "--verbose", "--continue",
+                .containsExactly("claude", "-p", "--output-format", "stream-json", "--verbose",
+                        "--input-format", "stream-json", "--continue",
                         "--append-system-prompt", BridgeProperties.Runner.DEFAULT_SUMMARY_PROMPT,
                         "--allowedTools", "Read,Bash(git status:*)");
     }
@@ -69,33 +67,55 @@ class ClaudeRunnerTest {
         assertThat(res.text()).contains("does not exist");
     }
 
-    @Test
-    @DisabledOnOs(OS.WINDOWS)
-    void textArrivesThroughStdinAndJsonIsParsed(@TempDir Path dir) throws Exception {
-        // A stand-in for `claude`: echoes stdin back inside Claude Code's JSON shape.
-        Path fake = dir.resolve("fake-claude");
-        Files.writeString(fake, """
-                #!/bin/sh
-                body=$(cat)
-                printf '{"result":"got: %s","session_id":"s-42","is_error":false}' "$body"
-                """);
-        Files.setPosixFilePermissions(fake, PosixFilePermissions.fromString("rwx------"));
+    static ClaudeRunner fakeRunner(Path dir, int steps, long stepMillis) {
         BridgeProperties props = new BridgeProperties(PROPS.hmacSecret(), PROPS.maxClockSkew(),
                 PROPS.approvalTtl(), 3000, 3500, null, null,
-                new BridgeProperties.Runner(List.of(fake.toString()), Duration.ofSeconds(10),
+                new BridgeProperties.Runner(FakeClaude.command(steps, stepMillis), Duration.ofSeconds(60),
                         dir.resolve("out").toString(), Duration.ofDays(30), ""), PROPS.folders());
-        var res = new ClaudeRunner(props, new ObjectMapper())
+        return new ClaudeRunner(props, new ObjectMapper());
+    }
+
+    @Test
+    void textArrivesThroughStdinAndTheRunEndsAfterTheAnswer(@TempDir Path dir) throws Exception {
+        // FakeClaude keeps reading stdin after its answer: the run only ends because the
+        // runner closes stdin once it sees the result event.
+        var res = fakeRunner(dir, 2, 50)
                 .run(task(RunMode.NEW, null, "hello & goodbye"), new Folder(dir.toString(), List.of(), null));
         assertThat(res.ok()).isTrue();
-        assertThat(res.text()).isEqualTo("got: hello & goodbye");
-        assertThat(res.sessionId()).isEqualTo("s-42");
-        // the full result is saved to <output-dir>/<task id>.txt
+        assertThat(res.text()).isEqualTo("done: hello & goodbye");
+        assertThat(res.sessionId()).isEqualTo("fake-1");
         // full result saved as <output-dir>/<folder>/<session id>/<task id>.txt, nothing left in _running
-        Path session = dir.resolve("out").resolve("x").resolve("s-42").toAbsolutePath();
+        Path session = dir.resolve("out").resolve("x").resolve("fake-1").toAbsolutePath();
         assertThat(res.outputFile()).isEqualTo(session.resolve("abc.txt"));
         assertThat(session.resolve("abc.stdout.json")).exists();
+        assertThat(session.resolve("abc.log.txt")).content().contains("→ Bash(step 1)", "Claude: done: hello");
         assertThat(dir.resolve("out").resolve("x").resolve("_running")).isEmptyDirectory();
-        assertThat(Files.readString(res.outputFile())).isEqualTo("got: hello & goodbye");
+        assertThat(Files.readString(res.outputFile())).isEqualTo("done: hello & goodbye");
+    }
+
+    @Test
+    void messageDeliveredDuringTheRunReachesTheSameSession(@TempDir Path dir) throws Exception {
+        ClaudeRunner runner = fakeRunner(dir, 6, 300);
+        Task t = task(RunMode.NEW, null, "count");
+        var pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        var future = pool.submit(() -> runner.run(t, new Folder(dir.toString(), List.of(), null)));
+        Path stream = runner.runningStdout(t);
+        long until = System.currentTimeMillis() + 20_000;
+        while (!(runner.isLive("abc") && Files.exists(stream) && Files.readString(stream).contains("step 1"))) {
+            assertThat(System.currentTimeMillis()).isLessThan(until);
+            Thread.sleep(50);
+        }
+        long offset = runner.deliver("abc", "also say hi");
+        assertThat(offset).isPositive();
+
+        var res = future.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        pool.shutdown();
+        assertThat(res.text()).isEqualTo("done: count | with: also say hi");
+        Path log = res.outputFile().resolveSibling("abc.log.txt");
+        assertThat(log).content().contains("✉ Message from the caller (approved): also say hi", "Claude: got: also say hi");
+        // after the run nothing can be delivered any more
+        assertThat(runner.isLive("abc")).isFalse();
+        assertThat(runner.deliver("abc", "too late")).isEqualTo(-1);
     }
 
     @Test

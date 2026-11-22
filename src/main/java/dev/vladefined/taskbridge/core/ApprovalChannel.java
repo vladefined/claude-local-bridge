@@ -12,4 +12,16 @@ public interface ApprovalChannel {
     /** The approved task finished running. */
     default void onFinished(Task task) {
     }
+
+    /**
+     * A message for the running {@code task} waits for approval.
+     *
+     * @param recentSteps the agent's last steps, so the owner sees what it is doing now
+     */
+    default void requestMessageApproval(Task task, TaskMessage message, java.util.List<String> recentSteps) {
+    }
+
+    /** The message was decided, delivered, or could not be delivered: update or remove the controls. */
+    default void onMessageUpdated(Task task, TaskMessage message) {
+    }
 }
