@@ -18,6 +18,8 @@ import java.util.function.BiConsumer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import dev.vladefined.taskbridge.core.Summary;
+
 /**
  * Reads Claude Code's {@code --output-format stream-json} output: one JSON event per
  * line (system init, assistant messages with text and tool calls, tool results, and a
@@ -57,8 +59,9 @@ public final class StreamLog {
     }
 
     /**
-     * All {@code result} events, joined. A single JSON object with a {@code result} field
-     * (the old json format, or a stand-in for claude) is accepted too.
+     * All {@code result} events, joined. There is more than one when the agent answered,
+     * then went on after a background command finished. Only the last answer keeps its
+     * {@code SUMMARY:} line; one in an earlier answer was written before the work was done.
      */
     public static Final findFinal(Path stdout, ObjectMapper json) throws IOException {
         List<String> results = new ArrayList<>();
@@ -75,7 +78,14 @@ public final class StreamLog {
         if (results.isEmpty()) {
             return null;
         }
-        return new Final(String.join("\n\n", results), error[0], session[0]);
+        List<String> parts = new ArrayList<>();
+        for (int i = 0; i < results.size(); i++) {
+            String r = i < results.size() - 1 ? Summary.split(results.get(i)).body() : results.get(i);
+            if (!r.isBlank() || i == results.size() - 1) {
+                parts.add(r);
+            }
+        }
+        return new Final(String.join("\n\n", parts), error[0], session[0]);
     }
 
     /** True for a {@code result} event: the agent's answer at the end of a turn. */

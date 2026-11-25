@@ -46,6 +46,14 @@ class StreamLogTest {
     }
 
     @Test
+    void onlyTheLastAnswerKeepsItsSummaryLine(@TempDir Path dir) throws Exception {
+        String r1 = "{\"type\":\"result\",\"result\":\"Started in the background.\\n\\nSUMMARY: waiting\",\"session_id\":\"s\"}\n";
+        String r2 = "{\"type\":\"result\",\"result\":\"done slept\\n\\nSUMMARY: slept 7 min\",\"session_id\":\"s\"}\n";
+        StreamLog.Final f = StreamLog.findFinal(write(dir, r1 + r2), json);
+        assertThat(f.result()).isEqualTo("Started in the background.\n\ndone slept\n\nSUMMARY: slept 7 min");
+    }
+
+    @Test
     void objectWithoutResultTypeIsNotAnAnswer(@TempDir Path dir) throws Exception {
         assertThat(StreamLog.findFinal(
                 write(dir, "{\"result\":\"ok\",\"session_id\":\"s\",\"is_error\":false}\r\n"), json)).isNull();
@@ -114,7 +122,7 @@ class StreamLogTest {
     void severalAnswersAreJoined(@TempDir Path dir) throws Exception {
         String two = STREAM + "{\"type\":\"result\",\"is_error\":false,\"result\":\"late answer\",\"session_id\":\"s-1\"}\n";
         assertThat(StreamLog.findFinal(write(dir, two), json).result())
-                .isEqualTo("Готово.\nSUMMARY: Прочитал run.py.\n\nlate answer");
+                .isEqualTo("Готово.\n\nlate answer");
     }
 
     @Test
