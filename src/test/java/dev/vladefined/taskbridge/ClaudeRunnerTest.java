@@ -75,6 +75,59 @@ class ClaudeRunnerTest {
         return new ClaudeRunner(props, new ObjectMapper());
     }
 
+    static ClaudeRunner limitedRunner(Path dir, List<String> command, Duration total, Duration idle,
+                                      Duration backgroundIdle, Duration exitGrace) {
+        BridgeProperties props = new BridgeProperties(PROPS.hmacSecret(), PROPS.maxClockSkew(),
+                PROPS.approvalTtl(), 3000, 3500, null, null,
+                new BridgeProperties.Runner(command, total, dir.resolve("out").toString(), Duration.ofDays(30), "",
+                        idle, backgroundIdle, exitGrace), PROPS.folders());
+        return new ClaudeRunner(props, new ObjectMapper());
+    }
+
+    @Test
+    void silentAgentIsStoppedByTheIdleLimit(@TempDir Path dir) {
+        long t0 = System.nanoTime();
+        var res = limitedRunner(dir, FakeClaude.command(1, 20_000), Duration.ofMinutes(5), Duration.ofSeconds(2),
+                Duration.ofMinutes(5), Duration.ofSeconds(30))
+                .run(task(RunMode.NEW, null, "x"), new Folder(dir.toString(), List.of(), null));
+        assertThat(res.ok()).isFalse();
+        assertThat(res.text()).contains("No output for 2 s", "idle limit");
+        assertThat(Duration.ofNanos(System.nanoTime() - t0)).isLessThan(Duration.ofSeconds(15));
+    }
+
+    @Test
+    void backgroundCommandsMayBeSilentLonger(@TempDir Path dir) {
+        // 4 s of silence while a background command runs: longer than the idle limit (2 s),
+        // shorter than the background limit
+        var res = limitedRunner(dir, FakeClaude.command(1, 50, 4_000, 0), Duration.ofMinutes(5),
+                Duration.ofSeconds(2), Duration.ofSeconds(30), Duration.ofSeconds(30))
+                .run(task(RunMode.NEW, null, "x"), new Folder(dir.toString(), List.of(), null));
+        assertThat(res.ok()).isTrue();
+        assertThat(res.text()).isEqualTo("done: x");
+        assertThat(res.outputFile().resolveSibling("abc.log.txt")).content()
+                .contains("⏳ Moved to the background", "⏹ Background command \"long job\" completed");
+    }
+
+    @Test
+    void processThatDoesNotExitAfterAnsweringIsStoppedButKeepsItsAnswer(@TempDir Path dir) {
+        long t0 = System.nanoTime();
+        var res = limitedRunner(dir, FakeClaude.command(1, 50, 0, 60_000), Duration.ofMinutes(5),
+                Duration.ofMinutes(5), Duration.ofMinutes(5), Duration.ofSeconds(1))
+                .run(task(RunMode.NEW, null, "x"), new Folder(dir.toString(), List.of(), null));
+        assertThat(res.ok()).isTrue();
+        assertThat(res.text()).isEqualTo("done: x");
+        assertThat(Duration.ofNanos(System.nanoTime() - t0)).isLessThan(Duration.ofSeconds(20));
+    }
+
+    @Test
+    void totalLimitStillApplies(@TempDir Path dir) {
+        var res = limitedRunner(dir, FakeClaude.command(50, 500), Duration.ofSeconds(3), Duration.ofMinutes(5),
+                Duration.ofMinutes(5), Duration.ofSeconds(30))
+                .run(task(RunMode.NEW, null, "x"), new Folder(dir.toString(), List.of(), null));
+        assertThat(res.ok()).isFalse();
+        assertThat(res.text()).contains("Timed out after 3 s (total limit)");
+    }
+
     @Test
     void textArrivesThroughStdinAndTheRunEndsAfterTheAnswer(@TempDir Path dir) throws Exception {
         // FakeClaude keeps reading stdin after its answer: the run only ends because the

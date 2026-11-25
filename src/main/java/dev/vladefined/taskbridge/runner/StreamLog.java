@@ -271,9 +271,32 @@ public final class StreamLog {
         }
         switch (n.path("type").asText("")) {
             case "system" -> {
-                if ("init".equals(n.path("subtype").asText()) && full) {
-                    out.add("[start] session " + n.path("session_id").asText("?")
-                            + (n.hasNonNull("model") ? ", model " + n.path("model").asText() : ""));
+                switch (n.path("subtype").asText("")) {
+                    case "init" -> {
+                        if (full) {
+                            out.add("[start] session " + n.path("session_id").asText("?")
+                                    + (n.hasNonNull("model") ? ", model " + n.path("model").asText() : ""));
+                        }
+                    }
+                    // Background commands (undocumented events of Claude Code's stream-json)
+                    case "task_started" -> {
+                        if (n.path("is_backgrounded").asBoolean(false)) {
+                            out.add("⏳ Started in the background: "
+                                    + cut(oneLine(n.path("description").asText("")), STEP_CHARS));
+                        }
+                    }
+                    case "task_updated" -> {
+                        if (n.path("patch").path("is_backgrounded").asBoolean(false)) {
+                            out.add("⏳ Moved to the background (still running)");
+                        }
+                    }
+                    case "task_notification" -> {
+                        String summary = n.path("summary").asText("");
+                        out.add("⏹ " + (summary.isBlank()
+                                ? "Background task " + n.path("status").asText("ended")
+                                : cut(oneLine(summary), STEP_CHARS)));
+                    }
+                    default -> { }
                 }
             }
             case "assistant" -> {

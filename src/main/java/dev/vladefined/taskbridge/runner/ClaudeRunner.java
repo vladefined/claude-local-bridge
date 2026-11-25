@@ -19,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.vladefined.taskbridge.config.BridgeProperties;
@@ -50,6 +51,14 @@ import dev.vladefined.taskbridge.core.Task;
  * written after the last message sent: the agent has answered everything it was given.
  * A message sent after an answer was written keeps stdin open until the agent answers
  * it too. Once closed, further messages are refused, never silently dropped.
+ *
+ * <p>Limits. A task is stopped when the stream stays silent for {@code idle-timeout}; when
+ * Claude Code has moved a command to the background (the {@code background_tasks_changed}
+ * system event lists it), the silence may last up to {@code background-idle-timeout}.
+ * These events are not documented; if a version stops sending them, the bridge simply sees
+ * no background work and applies the shorter limit. The total time is capped at the task's
+ * timeout. If the agent has answered, nothing runs in the background and the process still
+ * has not exited after {@code exit-grace}, it is stopped and the answer is kept.
  */
 @Component
 public class ClaudeRunner {
@@ -134,16 +143,16 @@ public class ClaudeRunner {
         }
         live.put(task.id(), session);
 
-        String failure = null;
+        Wait wait;
         try {
-            failure = await(p, session, timeout);
+            wait = await(p, session, timeout);
         } finally {
             live.remove(task.id());
             session.close();
         }
-        RunResult parsed = failure != null
-                ? new RunResult(false, failure + tail(stderr), null, null)
-                : parse(p.exitValue(), stdout, stderr);
+        RunResult parsed = wait.failure() != null
+                ? new RunResult(false, wait.failure() + tail(stderr), null, null)
+                : parse(wait.stoppedAfterAnswer() ? 0 : exitValue(p), stdout, stderr);
         try {
             Files.writeString(full, parsed.text(), StandardCharsets.UTF_8);
             writeTranscript(task, stdout, transcript, session.delivered());
@@ -159,6 +168,15 @@ public class ClaudeRunner {
         } catch (IOException e) {
             log.warn("task {}: could not save full output: {}", task.id(), e.toString());
             return parsed;
+        }
+    }
+
+    private static int exitValue(Process p) {
+        try {
+            return p.waitFor();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return -1;
         }
     }
 
@@ -179,30 +197,74 @@ public class ClaudeRunner {
     /**
      * Waits for the process, closing stdin once the agent has answered.
      *
-     * @return a failure text, or null if the process ended by itself
+     * <p>Three limits, checked every 250 ms:
+     * <ul>
+     * <li>total: the folder's {@code timeout} (or {@code runner.default-timeout});</li>
+     * <li>idle: no new line in the stream for {@code runner.idle-timeout}, or for
+     *     {@code runner.background-idle-timeout} while Claude Code reports background
+     *     commands ({@code background_tasks_changed} events);</li>
+     * <li>exit: the agent answered, stdin is closed and nothing runs in the background,
+     *     yet the process is still there after {@code runner.exit-grace}. The answer is
+     *     already written, so this one is not a failure.</li>
+     * </ul>
      */
-    private String await(Process p, LiveSession session, Duration timeout) {
-        long deadline = System.nanoTime() + timeout.toNanos();
-        ResultWatcher watcher = new ResultWatcher(session.stdout);
+    Wait await(Process p, LiveSession session, Duration timeout) {
+        BridgeProperties.Runner rc = props.runner();
+        long start = System.nanoTime();
+        long deadline = start + timeout.toNanos();
+        ResultWatcher watcher = new ResultWatcher(session.stdout, start);
         try {
             while (p.isAlive()) {
-                if (System.nanoTime() > deadline) {
-                    p.descendants().forEach(ProcessHandle::destroyForcibly);
-                    p.destroyForcibly();
-                    return "Timed out after " + timeout.toMinutes() + " min";
+                long now = System.nanoTime();
+                if (now > deadline) {
+                    kill(p);
+                    return Wait.failed("Timed out after " + minutes(timeout) + " (total limit)");
                 }
                 long answeredAt = watcher.lastResultOffset(json);
                 if (answeredAt >= 0) {
                     session.closeIfAnsweredAfterLastMessage(answeredAt);
                 }
+                boolean background = watcher.backgroundTasks() > 0;
+                Duration idle = background ? rc.backgroundIdleTimeout() : rc.idleTimeout();
+                if (now - watcher.lastGrowthNanos() > idle.toNanos()) {
+                    kill(p);
+                    return Wait.failed("No output for " + minutes(idle)
+                            + (background ? " while background commands were running" : "")
+                            + ": the agent looks stuck (idle limit)");
+                }
+                if (session.isClosed() && !background && watcher.answeredAfterBackground()
+                        && now - watcher.lastResultNanos() > rc.exitGrace().toNanos()) {
+                    log.warn("process did not exit {} after its answer; stopping it", rc.exitGrace());
+                    kill(p);
+                    return Wait.STOPPED_AFTER_ANSWER;
+                }
                 Thread.sleep(250);
             }
-            return null;
+            return Wait.EXITED;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            p.destroyForcibly();
-            return "Interrupted";
+            kill(p);
+            return Wait.failed("Interrupted");
         }
+    }
+
+    /** How waiting ended: a failure text, or null; and whether the process was stopped after answering. */
+    record Wait(String failure, boolean stoppedAfterAnswer) {
+        static final Wait EXITED = new Wait(null, false);
+        static final Wait STOPPED_AFTER_ANSWER = new Wait(null, true);
+
+        static Wait failed(String text) {
+            return new Wait(text, false);
+        }
+    }
+
+    private static void kill(Process p) {
+        p.descendants().forEach(ProcessHandle::destroyForcibly);
+        p.destroyForcibly();
+    }
+
+    private static String minutes(Duration d) {
+        return d.toMinutes() > 0 ? d.toMinutes() + " min" : d.toSeconds() + " s";
     }
 
     /** Is the agent for this task running and still accepting messages? */
@@ -295,33 +357,67 @@ public class ClaudeRunner {
         }
     }
 
-    /** Reads the growing stdout file from where it stopped and reports {@code result} events. */
+    /**
+     * Reads the growing stdout file from where it stopped. Reports {@code result} events,
+     * when the stream last grew, and how many background commands Claude Code says are
+     * running ({@code system/background_tasks_changed}; an undocumented event, so its
+     * absence only means "none known").
+     */
     public static final class ResultWatcher {
         private final Path file;
         private long pos;
         private final java.io.ByteArrayOutputStream partial = new java.io.ByteArrayOutputStream();
-
         private long lineStart;
+        /** Start offset of the last result line read so far, or -1. */
+        private long lastResult = -1;
+        private long lastResultNanos;
+        /** Start offset of the last background_tasks_changed line, or -1. */
+        private long lastBackgroundChange = -1;
+        private int backgroundTasks;
+        private long lastGrowthNanos;
 
         public ResultWatcher(Path file) {
+            this(file, System.nanoTime());
+        }
+
+        public ResultWatcher(Path file, long startNanos) {
             this.file = file;
+            this.lastGrowthNanos = startNanos;
         }
 
         /** @return the start offset of the last result line read so far, or -1 if none (yet) */
-        private long lastResult = -1;
-
         public long lastResultOffset(ObjectMapper json) {
             readMore(json);
             return lastResult;
         }
 
-        private boolean readMore(ObjectMapper json) {
-            boolean seen = false;
+        /** Background commands running as of the last {@code background_tasks_changed} event. */
+        public int backgroundTasks() {
+            return backgroundTasks;
+        }
+
+        /** When the stream last got new bytes (System.nanoTime), or when watching started. */
+        public long lastGrowthNanos() {
+            return lastGrowthNanos;
+        }
+
+        /** When the last result line was read (System.nanoTime). */
+        public long lastResultNanos() {
+            return lastResultNanos;
+        }
+
+        /** A result was written after the last change in background commands (or there was none). */
+        public boolean answeredAfterBackground() {
+            return lastResult > lastBackgroundChange;
+        }
+
+        private void readMore(ObjectMapper json) {
             try (RandomAccessFile f = new RandomAccessFile(file.toFile(), "r")) {
                 long len = f.length();
                 if (len <= pos) {
-                    return false;
+                    return;
                 }
+                lastGrowthNanos = System.nanoTime();
                 f.seek(pos);
                 byte[] buf = new byte[(int) Math.min(len - pos, 1 << 20)];
                 f.readFully(buf);
@@ -330,27 +426,38 @@ public class ClaudeRunner {
                 for (byte b : buf) {
                     at++;
                     if (b == '\n') {
-                        String line = partial.toString(StandardCharsets.UTF_8);
+                        line(partial.toString(StandardCharsets.UTF_8), json);
                         partial.reset();
-                        if (line.contains("\"result\"")) {
-                            try {
-                                if (StreamLog.isFinal(json.readTree(line))) {
-                                    lastResult = lineStart;
-                                    seen = true;
-                                }
-                            } catch (IOException ignored) {
-                                // not JSON
-                            }
-                        }
                         lineStart = at;
                     } else if (partial.size() < (8 << 20)) {
                         partial.write(b);
                     }
                 }
             } catch (IOException e) {
-                return false;
+                // not there yet, or being moved: try again next time
             }
-            return seen;
+        }
+
+        private void line(String line, ObjectMapper json) {
+            boolean result = line.contains("\"result\"");
+            boolean background = line.contains("background_tasks_changed");
+            if (!result && !background) {
+                return;
+            }
+            try {
+                JsonNode n = json.readTree(line);
+                if (result && StreamLog.isFinal(n)) {
+                    lastResult = lineStart;
+                    lastResultNanos = System.nanoTime();
+                } else if (background && "system".equals(n.path("type").asText())
+                        && "background_tasks_changed".equals(n.path("subtype").asText())) {
+                    JsonNode tasks = n.path("tasks");
+                    backgroundTasks = tasks.isArray() ? tasks.size() : 0;
+                    lastBackgroundChange = lineStart;
+                }
+            } catch (IOException ignored) {
+                // not JSON
+            }
         }
     }
 
