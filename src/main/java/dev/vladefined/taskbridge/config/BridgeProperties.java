@@ -90,7 +90,8 @@ public record BridgeProperties(
         public static final String DEFAULT_SUMMARY_PROMPT =
                 "When you finish, end your final answer with one separate last line that starts with "
                 + "SUMMARY: and says in one or two short sentences what you did and the outcome, "
-                + "in the language of the task.";
+                + "in the language of the task. Write it only in the answer that ends the task: "
+                + "if you are still waiting for a background command, do not write it yet.";
 
         public Runner(List<String> command, Duration defaultTimeout, String outputDir,
                       Duration outputRetention, String summaryPrompt) {
