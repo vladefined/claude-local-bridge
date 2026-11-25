@@ -49,6 +49,9 @@ java -jar target/claude-local-bridge-0.1.0.jar
 ```
 
 Folders, tools and timeouts are in `src/main/resources/application.yml`.
+A task is stopped when it prints nothing for 5 minutes (2 hours while Claude Code has a
+command running in the background), when it runs longer than 2 hours in total, or 30
+seconds after it has answered if the process still has not exited (the answer is kept).
 If `claude` is not found, set `bridge.runner.command` to the full path of `claude.exe`.
 Messages, toasts and the local page are in English; set `$env:BRIDGE_LANGUAGE = "ru"`
 (or `bridge.ui.language`) for Russian. Texts live in `src/main/resources/ui/<language>.properties`.

@@ -35,7 +35,14 @@ bridge:
     protocol-buttons: true
   runner:
     command: claude
-    default-timeout: 20m
+    # Limits for one task. The idle limit is what usually stops a stuck agent: it counts
+    # time with no new output. Claude Code moves a long Bash command to the background
+    # (after 2 min) and reports it in the stream; while such a command runs, the longer
+    # background idle limit applies. default-timeout is only the hard ceiling.
+    default-timeout: 2h          # total, per task; a folder's own timeout overrides it
+    idle-timeout: 5m             # no output and nothing running in the background
+    background-idle-timeout: 2h  # no output while background commands are running
+    exit-grace: 30s              # answered, nothing in the background, but still running
     output-dir: outputs          # outputs/<folder>/<session id>/<task id>.txt
     output-retention: 30d        # 0 = keep forever; the DB row (short result) is always kept
     # Asks Claude to end with a "SUMMARY: ..." line, shown first in Telegram and in the
@@ -47,4 +54,3 @@ bridge:
     pibench:
       path: 'E:\pibench'
       allowed-tools: [Read, Grep, Glob, Edit, Write, "Bash(python:*)", "Bash(git status:*)", "Bash(git diff:*)"]
-      timeout: 30m
