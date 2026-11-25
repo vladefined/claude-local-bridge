@@ -46,10 +46,9 @@ class StreamLogTest {
     }
 
     @Test
-    void singleJsonObjectIsStillUnderstood(@TempDir Path dir) throws Exception {
-        StreamLog.Final f = StreamLog.findFinal(
-                write(dir, "{\"result\":\"ok\",\"session_id\":\"s\",\"is_error\":false}\r\n"), json);
-        assertThat(f.result()).isEqualTo("ok");
+    void objectWithoutResultTypeIsNotAnAnswer(@TempDir Path dir) throws Exception {
+        assertThat(StreamLog.findFinal(
+                write(dir, "{\"result\":\"ok\",\"session_id\":\"s\",\"is_error\":false}\r\n"), json)).isNull();
     }
 
     @Test

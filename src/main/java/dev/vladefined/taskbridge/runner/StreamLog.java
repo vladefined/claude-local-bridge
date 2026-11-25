@@ -78,13 +78,9 @@ public final class StreamLog {
         return new Final(String.join("\n\n", results), error[0], session[0]);
     }
 
-    /** True for a {@code result} event (or the single-object json format). */
+    /** True for a {@code result} event: the agent's answer at the end of a turn. */
     static boolean isFinal(JsonNode n) {
-        if (n == null || !n.has("result")) {
-            return false;
-        }
-        String type = n.path("type").asText("");
-        return type.isEmpty() || "result".equals(type);
+        return n != null && n.has("result") && "result".equals(n.path("type").asText(""));
     }
 
     /** Writes a readable transcript of the whole run, with added messages where they were delivered. */
