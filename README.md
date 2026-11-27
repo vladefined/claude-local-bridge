@@ -174,5 +174,6 @@ Planned: a remote MCP endpoint so any Claude chat can submit tasks.
 ## Authorship
 
 Idea, requirements and security design: Vladislav Iablotskii. The code was written by
-Claude Code. I have read most of the core and asked for the changes I found while reading;
-the pull requests show how the project changed.
+Claude Code. I read the whole first version to know how it is built, then reviewed the
+diff of every later change and had Claude Code fix what I found; the pull requests show
+that history.
