@@ -160,14 +160,19 @@ and the bridge host must be allowed by its network policy.
 
 ## Status
 
-30 unit/integration tests, plus an end-to-end run with a fake `claude` binary through
-the HTTP API, the local approval page and the client. Verified on a real Windows 11
-machine: signed request, Telegram approval with message edit, Windows toast approval,
-real `claude -p` run and the result sent back. Not yet used from a cloud agent
-through a tunnel.
+In daily use on a Windows 11 machine, driven by a Claude Code agent in the cloud through a
+Cloudflare tunnel. Checked end to end on that setup: signed requests, approval in
+Telegram and in a Windows toast, real `claude -p` runs, live progress, messages added to a
+running task, folder access requests, and a 7-minute background command that the idle
+limit correctly let finish.
+
+76 unit and integration tests, including runs against a fake `claude` binary through the
+HTTP API, the local approval page and the client.
+
 Planned: a remote MCP endpoint so any Claude chat can submit tasks.
 
 ## Authorship
 
-Idea, requirements and security design: Vladislav Iablotskii. Implementation written
-with Claude Code.
+Idea, requirements and security design: Vladislav Iablotskii. The code was written by
+Claude Code. I have read most of the core and asked for the changes I found while reading;
+the pull requests show how the project changed.
